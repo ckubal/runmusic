@@ -392,19 +392,6 @@ struct RunCardStackView: View {
                     var updatedRun = self.runs[mainIndex]
                     updatedRun.spotifyTracks = tracks
                     
-                    // Calculate power song if we have tracks
-                    if !tracks.isEmpty {
-                        if let powerSongData = SpotifyService.shared.calculatePowerSong(
-                            tracks: tracks,
-                            runStartTime: updatedRun.date,
-                            runDuration: updatedRun.elapsedTime
-                        ) {
-                            updatedRun.powerSong = powerSongData.track
-                            updatedRun.powerSongAveragePace = powerSongData.averagePace
-                            logger.info("🔥 Calculated power song for \(runName): \(powerSongData.track.name)")
-                        }
-                    }
-                    
                     // Replace the entire run object to ensure SwiftUI detects the change
                     self.runs[mainIndex] = updatedRun
                     
