@@ -1,0 +1,311 @@
+{
+  "runmusic-functions:lib/authFunctions.js:14:71:<anonymous>": {
+    "filepath": "lib/authFunctions.js",
+    "start": "14:70",
+    "end": "58:1",
+    "callers": [
+      "runmusic-functions:lib/authFunctions.js"
+    ],
+    "callees": [
+      "runmusic-functions:lib/authFunctions.js:39:57:<anonymous>",
+      "<firebase-functions/lib/v2/providers/https>.HttpsError",
+      "<firebase-functions/lib/logger>.info",
+      "<firebase-functions/lib/logger>.error",
+      "<firebase-admin/lib/firestore>.getFirestore….collection",
+      "<firebase-admin/lib/auth>.getAuth….getUserByEmail",
+      "<firebase-admin/lib/firestore>.getFirestore….doc",
+      "<firebase-admin/lib/auth>.getAuth….map",
+      "<firebase-admin/lib/firestore>.getFirestore….get",
+      "<firebase-admin/lib/auth>.getAuth….includes",
+      "<firebase-admin/lib/auth>.getAuth….join"
+    ]
+  },
+  "runmusic-functions:lib/authFunctions.js:39:57:<anonymous>": {
+    "filepath": "lib/authFunctions.js",
+    "start": "39:56",
+    "end": "39:87",
+    "callers": [
+      "runmusic-functions:lib/authFunctions.js:14:71:<anonymous>"
+    ],
+    "callees": []
+  },
+  "runmusic-functions:lib/authFunctions.js:62:70:<anonymous>": {
+    "filepath": "lib/authFunctions.js",
+    "start": "62:69",
+    "end": "129:1",
+    "callers": [
+      "runmusic-functions:lib/authFunctions.js"
+    ],
+    "callees": [
+      "runmusic-functions:lib/authFunctions.js:110:57:<anonymous>",
+      "<firebase-functions/lib/v2/providers/https>.HttpsError",
+      "<firebase-functions/lib/logger>.info",
+      "<firebase-functions/lib/logger>.error",
+      "<firebase-admin/lib/firestore>.getFirestore….collection",
+      "<firebase-admin/lib/auth>.getAuth….getUserByEmail",
+      "<firebase-admin/lib/auth>.getAuth….getUsers",
+      "<firebase-admin/lib/firestore>.getFirestore….doc",
+      "<firebase-admin/lib/auth>.getAuth….map",
+      "<firebase-admin/lib/firestore>.getFirestore….get",
+      "<firebase-admin/lib/auth>.getAuth….includes",
+      "<firebase-admin/lib/auth>.getAuth….join"
+    ]
+  },
+  "runmusic-functions:lib/authFunctions.js:110:57:<anonymous>": {
+    "filepath": "lib/authFunctions.js",
+    "start": "110:56",
+    "end": "110:87",
+    "callers": [
+      "runmusic-functions:lib/authFunctions.js:62:70:<anonymous>"
+    ],
+    "callees": []
+  },
+  "runmusic-functions:lib/authFunctions.js:133:65:<anonymous>": {
+    "filepath": "lib/authFunctions.js",
+    "start": "133:64",
+    "end": "152:1",
+    "callers": [
+      "runmusic-functions:lib/authFunctions.js"
+    ],
+    "callees": [
+      "<firebase-functions/lib/v2/providers/https>.HttpsError",
+      "<firebase-functions/lib/logger>.info",
+      "<firebase-functions/lib/logger>.error",
+      "<firebase-admin/lib/firestore>.getFirestore….collection",
+      "<firebase-admin/lib/auth>.getAuth….deleteUser",
+      "<firebase-admin/lib/firestore>.getFirestore….doc",
+      "<firebase-admin/lib/firestore>.getFirestore….delete"
+    ]
+  },
+  "runmusic-functions:lib/index.js:19:63:<anonymous>": {
+    "filepath": "lib/index.js",
+    "start": "19:62",
+    "end": "139:1",
+    "callers": [
+      "runmusic-functions:lib/index.js"
+    ],
+    "callees": [
+      "runmusic-functions:lib/index.js:142:1:getActivityEmoji",
+      "runmusic-functions:lib/index.js:57:41:<anonymous>",
+      "<native>:Date",
+      "<native>:parseFloat",
+      "<native>:Array.prototype.includes",
+      "<native>:Date.prototype.toISOString",
+      "<firebase-admin>.firestore",
+      "<firebase-admin>.firestore….collectionGroup",
+      "<firebase-admin>.firestore….collection",
+      "<firebase-admin>.firestore….where",
+      "<firebase-admin>.firestore….doc",
+      "<firebase-admin>.firestore….limit",
+      "<firebase-admin>.firestore….get",
+      "<firebase-admin>.firestore….forEach",
+      "<firebase-admin>.firestore….split"
+    ]
+  },
+  "runmusic-functions:lib/index.js:57:41:<anonymous>": {
+    "filepath": "lib/index.js",
+    "start": "57:40",
+    "end": "64:11",
+    "callers": [
+      "runmusic-functions:lib/index.js:19:63:<anonymous>"
+    ],
+    "callees": [
+      "<native>:Date"
+    ]
+  },
+  "runmusic-functions:lib/index.js:142:1:getActivityEmoji": {
+    "filepath": "lib/index.js",
+    "start": "142:0",
+    "end": "158:1",
+    "callers": [
+      "runmusic-functions:lib/index.js:19:63:<anonymous>"
+    ],
+    "callees": []
+  },
+  "runmusic-functions:lib/index.js:160:84:<anonymous>": {
+    "filepath": "lib/index.js",
+    "start": "160:83",
+    "end": "160:146",
+    "callers": [],
+    "callees": []
+  },
+  "runmusic-functions:lib/index.js:161:83:<anonymous>": {
+    "filepath": "lib/index.js",
+    "start": "161:82",
+    "end": "161:144",
+    "callers": [],
+    "callees": []
+  },
+  "runmusic-functions:lib/index.js:162:78:<anonymous>": {
+    "filepath": "lib/index.js",
+    "start": "162:77",
+    "end": "162:134",
+    "callers": [],
+    "callees": []
+  },
+  "runmusic-functions:src/authFunctions.ts:15:3:<anonymous>": {
+    "filepath": "src/authFunctions.ts",
+    "start": "15:2",
+    "end": "64:3",
+    "callers": [
+      "runmusic-functions:src/authFunctions.ts"
+    ],
+    "callees": [
+      "runmusic-functions:src/authFunctions.ts:42:55:<anonymous>",
+      "<firebase-functions/lib/v2/providers/https>.HttpsError",
+      "<firebase-functions/lib/logger>.info",
+      "<firebase-functions/lib/logger>.error",
+      "<firebase-admin/lib/firestore>.getFirestore….collection",
+      "<firebase-admin/lib/auth>.getAuth….getUserByEmail",
+      "<firebase-admin/lib/firestore>.getFirestore….doc",
+      "<firebase-admin/lib/auth>.getAuth….map",
+      "<firebase-admin/lib/firestore>.getFirestore….get",
+      "<firebase-admin/lib/auth>.getAuth….includes",
+      "<firebase-admin/lib/auth>.getAuth….join"
+    ]
+  },
+  "runmusic-functions:src/authFunctions.ts:42:55:<anonymous>": {
+    "filepath": "src/authFunctions.ts",
+    "start": "42:54",
+    "end": "42:85",
+    "callers": [
+      "runmusic-functions:src/authFunctions.ts:15:3:<anonymous>"
+    ],
+    "callees": []
+  },
+  "runmusic-functions:src/authFunctions.ts:72:3:<anonymous>": {
+    "filepath": "src/authFunctions.ts",
+    "start": "72:2",
+    "end": "144:3",
+    "callers": [
+      "runmusic-functions:src/authFunctions.ts"
+    ],
+    "callees": [
+      "runmusic-functions:src/authFunctions.ts:122:55:<anonymous>",
+      "<firebase-functions/lib/v2/providers/https>.HttpsError",
+      "<firebase-functions/lib/logger>.info",
+      "<firebase-functions/lib/logger>.error",
+      "<firebase-admin/lib/firestore>.getFirestore….collection",
+      "<firebase-admin/lib/auth>.getAuth….getUserByEmail",
+      "<firebase-admin/lib/auth>.getAuth….getUsers",
+      "<firebase-admin/lib/firestore>.getFirestore….doc",
+      "<firebase-admin/lib/auth>.getAuth….map",
+      "<firebase-admin/lib/firestore>.getFirestore….get",
+      "<firebase-admin/lib/auth>.getAuth….includes",
+      "<firebase-admin/lib/auth>.getAuth….join"
+    ]
+  },
+  "runmusic-functions:src/authFunctions.ts:122:55:<anonymous>": {
+    "filepath": "src/authFunctions.ts",
+    "start": "122:54",
+    "end": "122:85",
+    "callers": [
+      "runmusic-functions:src/authFunctions.ts:72:3:<anonymous>"
+    ],
+    "callees": []
+  },
+  "runmusic-functions:src/authFunctions.ts:152:3:<anonymous>": {
+    "filepath": "src/authFunctions.ts",
+    "start": "152:2",
+    "end": "176:3",
+    "callers": [
+      "runmusic-functions:src/authFunctions.ts"
+    ],
+    "callees": [
+      "<firebase-functions/lib/v2/providers/https>.HttpsError",
+      "<firebase-functions/lib/logger>.info",
+      "<firebase-functions/lib/logger>.error",
+      "<firebase-admin/lib/firestore>.getFirestore….collection",
+      "<firebase-admin/lib/auth>.getAuth….deleteUser",
+      "<firebase-admin/lib/firestore>.getFirestore….doc",
+      "<firebase-admin/lib/firestore>.getFirestore….delete"
+    ]
+  },
+  "runmusic-functions:lib/authFunctions.js": {
+    "filepath": "lib/authFunctions.js",
+    "start": "1:0",
+    "end": "153:41",
+    "callers": [],
+    "callees": [
+      "runmusic-functions:lib/authFunctions.js:14:71:<anonymous>",
+      "runmusic-functions:lib/authFunctions.js:62:70:<anonymous>",
+      "runmusic-functions:lib/authFunctions.js:133:65:<anonymous>",
+      "<native>:Object.defineProperty",
+      "<native>:require",
+      "<firebase-functions/lib/v2/providers/https>.onCall",
+      "<firebase-functions/lib/v2/providers/https>.HttpsError",
+      "<firebase-admin/lib/firestore>.getFirestore",
+      "<firebase-admin/lib/auth>.getAuth",
+      "<firebase-functions/lib/logger>.info",
+      "<firebase-functions/lib/logger>.error",
+      "<firebase-admin/lib/firestore>.getFirestore….collection",
+      "<firebase-admin/lib/auth>.getAuth….getUserByEmail",
+      "<firebase-admin/lib/auth>.getAuth….getUsers",
+      "<firebase-admin/lib/auth>.getAuth….deleteUser",
+      "<firebase-admin/lib/firestore>.getFirestore….doc",
+      "<firebase-admin/lib/auth>.getAuth….map",
+      "<firebase-admin/lib/firestore>.getFirestore….get",
+      "<firebase-admin/lib/firestore>.getFirestore….delete",
+      "<firebase-admin/lib/auth>.getAuth….includes",
+      "<firebase-admin/lib/auth>.getAuth….join"
+    ]
+  },
+  "runmusic-functions:lib/index.js": {
+    "filepath": "lib/index.js",
+    "start": "1:0",
+    "end": "163:33",
+    "callers": [],
+    "callees": [
+      "runmusic-functions:lib/index.js:19:63:<anonymous>",
+      "<native>:Object.defineProperty",
+      "<native>:require",
+      "<firebase-admin/lib/app>.initializeApp",
+      "<firebase-admin>.firestore",
+      "<firebase-functions>.https.onRequest",
+      "<firebase-admin>.firestore….collectionGroup",
+      "<firebase-admin>.firestore….collection",
+      "<firebase-admin>.firestore….where",
+      "<firebase-admin>.firestore….doc",
+      "<firebase-admin>.firestore….limit",
+      "<firebase-admin>.firestore….get",
+      "<firebase-admin>.firestore….forEach",
+      "<firebase-admin>.firestore….split"
+    ]
+  },
+  "runmusic-functions:src/authFunctions.ts": {
+    "filepath": "src/authFunctions.ts",
+    "start": "1:0",
+    "end": "177:2",
+    "callers": [],
+    "callees": [
+      "runmusic-functions:src/authFunctions.ts:15:3:<anonymous>",
+      "runmusic-functions:src/authFunctions.ts:72:3:<anonymous>",
+      "runmusic-functions:src/authFunctions.ts:152:3:<anonymous>",
+      "<firebase-functions/lib/v2/providers/https>.onCall",
+      "<firebase-functions/lib/v2/providers/https>.HttpsError",
+      "<firebase-admin/lib/firestore>.getFirestore",
+      "<firebase-admin/lib/auth>.getAuth",
+      "<firebase-functions/lib/logger>.info",
+      "<firebase-functions/lib/logger>.error",
+      "<firebase-admin/lib/firestore>.getFirestore….collection",
+      "<firebase-admin/lib/auth>.getAuth….getUserByEmail",
+      "<firebase-admin/lib/auth>.getAuth….getUsers",
+      "<firebase-admin/lib/auth>.getAuth….deleteUser",
+      "<firebase-admin/lib/firestore>.getFirestore….doc",
+      "<firebase-admin/lib/auth>.getAuth….map",
+      "<firebase-admin/lib/firestore>.getFirestore….get",
+      "<firebase-admin/lib/firestore>.getFirestore….delete",
+      "<firebase-admin/lib/auth>.getAuth….includes",
+      "<firebase-admin/lib/auth>.getAuth….join"
+    ]
+  },
+  "runmusic-functions:src/index.ts": {
+    "filepath": "src/index.ts",
+    "start": "1:0",
+    "end": "18:25",
+    "callers": [],
+    "callees": [
+      "<firebase-admin/lib/app>.initializeApp"
+    ]
+  }
+}

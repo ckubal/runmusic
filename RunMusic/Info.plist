@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>runthetunes-oauth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>runthetunes</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>google-signin</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.941742843917-e6j2lc32hk9ejc0h389fv7q4ff3t3qgi</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleDisplayName</key>
+	<string>run the tunes</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>run the tunes needs access to your location to display your running routes.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>run the tunes needs access to your photo library to add custom backgrounds to your run cards using photos taken during your runs.</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>strava</string>
+		<string>spotify</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>background-app-refresh</string>
+		<string>background-processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.runmusic.spotify-sync</string>
+		<string>com.runmusic.newrun-check</string>
+	</array>
+</dict>
+</plist>
