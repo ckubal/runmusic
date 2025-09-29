@@ -392,6 +392,19 @@ struct RunCardStackView: View {
                     var updatedRun = self.runs[mainIndex]
                     updatedRun.spotifyTracks = tracks
                     
+                    // Calculate power song if we have tracks
+                    if !tracks.isEmpty {
+                        if let powerSongData = SpotifyService.shared.calculatePowerSong(
+                            tracks: tracks,
+                            runStartTime: updatedRun.date,
+                            runDuration: updatedRun.elapsedTime
+                        ) {
+                            updatedRun.powerSong = powerSongData.track
+                            updatedRun.powerSongAveragePace = powerSongData.averagePace
+                            logger.info("🔥 Calculated power song for \(runName): \(powerSongData.track.name)")
+                        }
+                    }
+                    
                     // Replace the entire run object to ensure SwiftUI detects the change
                     self.runs[mainIndex] = updatedRun
                     
@@ -400,6 +413,43 @@ struct RunCardStackView: View {
                     // DEBUG: Verify the update worked immediately
                     let verifyCount = self.runs[mainIndex].spotifyTracks?.count ?? -1
                     logger.info("🔍 DEBUG: Immediate verification - runs[\(mainIndex)] now has \(verifyCount) tracks")
+                    
+                    // Calculate power song if we have tracks and route data
+                    if !tracks.isEmpty && !updatedRun.routeCoordinates.isEmpty {
+                        // Fetch streams and calculate power song
+                        Task.detached(priority: .background) {
+                            do {
+                                if let activityId = Int(updatedRun.id) {
+                                    let streams = try await StravaService.shared.fetchActivityStreams(
+                                        id: activityId, 
+                                        types: ["time", "latlng", "velocity_smooth"]
+                                    )
+                                    
+                                    await MainActor.run {
+                                        // Update the run with power song data
+                                        if let runIndex = self.runs.firstIndex(where: { $0.id == runId }) {
+                                            var finalRun = self.runs[runIndex]
+                                            DataConversionService.shared.calculatePowerSong(for: &finalRun, from: streams)
+                                            self.runs[runIndex] = finalRun
+                                            
+                                            if let powerSong = finalRun.powerSong {
+                                                self.logger.info("🔥 Calculated power song for \(runName): \(powerSong.name)")
+                                                
+                                                // Update cache with power song data
+                                                Task.detached(priority: .background) {
+                                                    await RunCacheService.shared.updateCachedRun(finalRun)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch {
+                                await MainActor.run {
+                                    self.logger.error("❌ Failed to calculate power song for \(runName): \(error)")
+                                }
+                            }
+                        }
+                    }
                 }
                 
                 // Update run in swiped array with explicit SwiftUI refresh
@@ -412,11 +462,54 @@ struct RunCardStackView: View {
                     self.swipedRuns[swipedIndex] = updatedRun
                     
                     logger.info("🎵 Updated swiped runs[\(swipedIndex)] '\(runName)' with \(tracks.count) tracks")
+                    
+                    // Calculate power song for swiped runs too
+                    if !tracks.isEmpty && !updatedRun.routeCoordinates.isEmpty {
+                        Task.detached(priority: .background) {
+                            do {
+                                if let activityId = Int(updatedRun.id) {
+                                    let streams = try await StravaService.shared.fetchActivityStreams(
+                                        id: activityId, 
+                                        types: ["time", "latlng", "velocity_smooth"]
+                                    )
+                                    
+                                    await MainActor.run {
+                                        if let swipedIndex = self.swipedRuns.firstIndex(where: { $0.id == runId }) {
+                                            var finalRun = self.swipedRuns[swipedIndex]
+                                            DataConversionService.shared.calculatePowerSong(for: &finalRun, from: streams)
+                                            self.swipedRuns[swipedIndex] = finalRun
+                                            
+                                            if let powerSong = finalRun.powerSong {
+                                                self.logger.info("🔥 Calculated power song for swiped \(runName): \(powerSong.name)")
+                                                
+                                                // Update cache with power song data
+                                                Task.detached(priority: .background) {
+                                                    await RunCacheService.shared.updateCachedRun(finalRun)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch {
+                                await MainActor.run {
+                                    self.logger.error("❌ Failed to calculate power song for swiped \(runName): \(error)")
+                                }
+                            }
+                        }
+                    }
                 }
                 
                 // Only trigger refresh if we actually got tracks
                 if tracks.count > 0 {
                     logger.info("✅ Progressive load complete for '\(runName)' with \(tracks.count) tracks")
+                    
+                    // Update the cache with enriched data so future loads show complete metadata
+                    if let currentRun = self.runs.first(where: { $0.id == runId }) ?? 
+                                        self.swipedRuns.first(where: { $0.id == runId }) {
+                        Task.detached(priority: .background) {
+                            await RunCacheService.shared.updateCachedRun(currentRun)
+                        }
+                    }
                 }
                 
                 // Verification - check if the update worked
@@ -844,6 +937,13 @@ struct RunCardStackView: View {
                         
                         runActivities[i].spotifyTracks = tracks
                         logger.info("🎵 Loaded \(tracks.count) tracks for run: \(runActivities[i].name)")
+                        
+                        // Calculate power song if we have tracks and route data
+                        if !tracks.isEmpty && !runActivities[i].routeCoordinates.isEmpty {
+                            // We need to fetch streams for power song calculation
+                            // For now, defer this to progressive loading to avoid slowing initial load
+                            logger.info("🔥 Deferring power song calculation for \(runActivities[i].name) - will calculate during progressive loading")
+                        }
                     }
                     logger.info("🎵 Deferred Spotify loading for remaining \(runActivities.count - visibleCardLimit) runs")
                 }

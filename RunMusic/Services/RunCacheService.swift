@@ -46,7 +46,7 @@ class RunCacheService {
             let cachedRuns = try await firestoreService.getAllCachedRuns(userId: userId, limit: perPage)
             let runActivities = cachedRuns.map { $0.toRunActivity() }
             
-            // Note: Spotify tracks and location analysis are not cached and need to be added separately
+            // Return cached runs with all saved metadata (Spotify tracks, power song, route, weather)
             return runActivities
             
         } catch {
@@ -95,6 +95,29 @@ class RunCacheService {
         }
         
         print("🏃 RunCacheService: Finished caching \(runActivities.count) runs")
+    }
+    
+    /// Update a cached run with enriched data (Spotify tracks, power song, etc.)
+    /// This is called after progressive loading adds metadata to ensure cache stays current
+    func updateCachedRun(_ runActivity: RunActivity) async {
+        guard let userId = Auth.auth().currentUser?.uid else {
+            print("🏃 RunCacheService: No authenticated user, skipping cache update")
+            return
+        }
+        
+        do {
+            let enrichedCachedRun = CachedRunData(from: runActivity)
+            try await firestoreService.storeCachedRun(userId: userId, run: enrichedCachedRun)
+            print("🏃 RunCacheService: ✅ Updated cached run \(runActivity.id) with enriched data")
+            
+            // Log what was cached for debugging
+            let spotifyCount = runActivity.spotifyTracks?.count ?? 0
+            let hasPowerSong = runActivity.powerSong != nil
+            let hasRoute = !runActivity.routeCoordinates.isEmpty
+            print("🏃 RunCacheService: Cached metadata - Songs: \(spotifyCount), Power Song: \(hasPowerSong), Route: \(hasRoute)")
+        } catch {
+            print("🏃 RunCacheService: ❌ Failed to update cached run \(runActivity.id): \(error)")
+        }
     }
     
     /// Clear all cached runs for current user
@@ -149,13 +172,14 @@ class RunCacheService {
         for activity in runOnlyActivities {
             do {
                 let detailedActivity = try await stravaService.fetchDetailedActivity(id: activity.id)
-                let streams = try? await stravaService.fetchActivityStreams(id: activity.id)
+                let streams = try? await stravaService.fetchActivityStreams(id: activity.id, types: ["latlng", "time", "velocity_smooth"])
                 let runActivity = await DataConversionService.shared.convertStravaActivityToRunActivity(
                     activity,
                     detailedActivity: detailedActivity,
                     streams: streams
                 )
                 runActivities.append(runActivity)
+                print("🏃 RunCacheService: ✅ Processed activity \(activity.id) with route: \(!runActivity.routeCoordinates.isEmpty)")
             } catch {
                 print("🏃 RunCacheService: Failed to process activity \(activity.id): \(error)")
                 // Continue with other activities
