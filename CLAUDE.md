@@ -129,7 +129,7 @@ xcodebuild test -project RunMusic.xcodeproj -scheme RunMusic -destination 'platf
 
 ### ✅ Working Features
 1. **Card Stack Interface**: Swipe-based run browsing with smooth animations
-2. **Canvas Customization**: Drag/pinch/rotate assets for shareable cards  
+2. **✅ Canvas Customization - FULLY WORKING**: Instagram Story-like drag/pinch/rotate for all elements (Fixed Oct 13, 2025)
 3. **Authentication**: Strava OAuth (primary), Spotify OAuth (music), Firebase (optional)
 4. **Data Integration**: Strava runs + Spotify music matching
 5. **Firebase Cloud Functions**: Continuous sync, webhooks, public API
@@ -256,6 +256,33 @@ To ensure this problem never recurs, the system now:
 5. ✅ **Uses correct API parameters** (only `after`, no `before`)
 6. ✅ **Encrypts/decrypts tokens** exactly like the iOS app
 7. ✅ **Runs continuously** every 45 minutes without intervention
+
+---
+
+### 🎨 CANVAS CUSTOMIZATION FIX (October 13, 2025) - ✅ FULLY RESOLVED
+
+**Issue**: Drag/pinch/rotate gestures weren't working on iOS device despite being implemented.
+
+**Root Cause**: ScrollView in RunDetailView was consuming touch events before they could reach interactive elements.
+
+**Solution Implemented**:
+✅ **highPriorityGesture()**: Override ScrollView gesture conflicts  
+✅ **DragGesture(minimumDistance: 0)**: Immediate gesture response  
+✅ **allowsHitTesting(true)**: Ensure touch events reach interactive elements  
+✅ **Visual Feedback**: Opacity changes during interactions  
+✅ **Enhanced Animations**: Smooth interaction state transitions  
+
+**Interactive Elements Now Working**:
+- ✅ **Song Lists**: Fully draggable, scalable, rotatable with haptic feedback
+- ✅ **Route Maps**: Fully draggable, scalable, rotatable with haptic feedback
+- ✅ **Visual Indicators**: Elements dim slightly when being manipulated
+- ✅ **Gesture Priority**: Canvas interactions override scroll gestures
+
+**Files Modified**:
+- `RunMusic/Views/InteractiveShareableCardView.swift`: Added highPriorityGesture modifiers
+- `RunMusic/Views/RunDetailView.swift`: Added allowsHitTesting for touch handling
+
+**How to Use**: Open any run → Go to canvas/sharing screen → Drag, pinch, rotate song lists and route maps freely!
 
 ## 🛠️ Development Tools & MCPs
 
