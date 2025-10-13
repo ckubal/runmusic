@@ -263,6 +263,7 @@ struct RunDetailView: View {
             .aspectRatio(currentLayoutType.aspectRatio, contentMode: .fit)
             .shadow(radius: 8)
             .padding(.horizontal, 20)
+            .allowsHitTesting(true) // Ensure touch events reach the interactive elements
             .background(
                 // This allows us to capture the card view as a reference
                 GeometryReader { geometry in

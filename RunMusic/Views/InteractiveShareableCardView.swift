@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreLocation
+import UIKit
 
 // Struct to hold transformation states for export
 struct ShareableCardTransforms {
@@ -34,6 +35,7 @@ struct InteractiveShareableCardView: View {
     @State private var trackListLastOffset = CGSize.zero
     @State private var trackListLastScale: CGFloat = 1.0
     @State private var trackListLastRotation: Angle = .zero
+    @State private var isTrackListBeingInteracted = false
     
     // Route interaction states
     @State private var routeOffset = CGSize.zero
@@ -43,6 +45,7 @@ struct InteractiveShareableCardView: View {
     @State private var routeLastOffset = CGSize.zero
     @State private var routeLastScale: CGFloat = 1.0
     @State private var routeLastRotation: Angle = .zero
+    @State private var isRouteBeingInteracted = false
     
     // Route animation states
     @State private var showAnimatedRoute = false
@@ -238,10 +241,20 @@ struct InteractiveShareableCardView: View {
             .scaleEffect(trackListScale)
             .rotationEffect(trackListRotation)
             .offset(trackListOffset)
-            .gesture(
+            .zIndex(trackListZIndex)
+            .opacity(isTrackListBeingInteracted ? 0.8 : 1.0) // Visual feedback when dragging
+            .animation(.easeInOut(duration: 0.1), value: isTrackListBeingInteracted)
+            .highPriorityGesture(
                 SimultaneousGesture(
-                    DragGesture()
+                    DragGesture(minimumDistance: 0)
                         .onChanged { value in
+                            // Haptic feedback on first movement
+                            if !isTrackListBeingInteracted {
+                                let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                                impactFeedback.impactOccurred()
+                                isTrackListBeingInteracted = true
+                            }
+                            
                             trackListOffset = CGSize(
                                 width: trackListLastOffset.width + value.translation.width,
                                 height: trackListLastOffset.height + value.translation.height
@@ -254,10 +267,24 @@ struct InteractiveShareableCardView: View {
                         }
                         .onEnded { _ in
                             trackListLastOffset = trackListOffset
+                            isTrackListBeingInteracted = false
+                            
+                            // Haptic feedback on release
+                            let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                            impactFeedback.impactOccurred()
                         },
                     MagnificationGesture()
                         .onChanged { value in
-                            trackListScale = trackListLastScale * value
+                            let newScale = trackListLastScale * value
+                            let oldScale = trackListScale
+                            
+                            // Haptic feedback when crossing 0.5x increments
+                            if Int(oldScale * 2) != Int(newScale * 2) {
+                                let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                                impactFeedback.impactOccurred()
+                            }
+                            
+                            trackListScale = newScale
                             onExport?(getCurrentTransforms())
                         }
                         .onEnded { value in
@@ -283,6 +310,10 @@ struct InteractiveShareableCardView: View {
                     trackListLastScale = 1.0
                     trackListLastRotation = .zero
                 }
+                
+                // Haptic feedback for reset
+                let notificationFeedback = UINotificationFeedbackGenerator()
+                notificationFeedback.notificationOccurred(.success)
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: trackListOffset)
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: trackListScale)
@@ -317,10 +348,20 @@ struct InteractiveShareableCardView: View {
             .scaleEffect(routeScale)
             .rotationEffect(routeRotation)
             .offset(routeOffset)
-            .gesture(
+            .zIndex(routeZIndex)
+            .opacity(isRouteBeingInteracted ? 0.8 : 1.0) // Visual feedback when dragging
+            .animation(.easeInOut(duration: 0.1), value: isRouteBeingInteracted)
+            .highPriorityGesture(
                 SimultaneousGesture(
-                    DragGesture()
+                    DragGesture(minimumDistance: 0)
                         .onChanged { value in
+                            // Haptic feedback on first movement
+                            if !isRouteBeingInteracted {
+                                let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                                impactFeedback.impactOccurred()
+                                isRouteBeingInteracted = true
+                            }
+                            
                             routeOffset = CGSize(
                                 width: routeLastOffset.width + value.translation.width,
                                 height: routeLastOffset.height + value.translation.height
@@ -332,10 +373,24 @@ struct InteractiveShareableCardView: View {
                         }
                         .onEnded { _ in
                             routeLastOffset = routeOffset
+                            isRouteBeingInteracted = false
+                            
+                            // Haptic feedback on release
+                            let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                            impactFeedback.impactOccurred()
                         },
                     MagnificationGesture()
                         .onChanged { value in
-                            routeScale = routeLastScale * value
+                            let newScale = routeLastScale * value
+                            let oldScale = routeScale
+                            
+                            // Haptic feedback when crossing 0.5x increments
+                            if Int(oldScale * 2) != Int(newScale * 2) {
+                                let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                                impactFeedback.impactOccurred()
+                            }
+                            
+                            routeScale = newScale
                             onExport?(getCurrentTransforms())
                         }
                         .onEnded { value in
