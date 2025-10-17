@@ -23,11 +23,11 @@ struct RunCardView: View {
                 Spacer()
                 RoutePathView(
                     coordinates: run.routeCoordinates,
-                    lineWidth: 4.0,
+                    lineWidth: 6.0,
                     colorScheme: run.weatherBasedRouteColor ?? run.colorScheme ?? RunColorScheme.presets[0]
                 )
-                .opacity(0.6)
-                .frame(width: 120, height: 120)
+                .opacity(0.9)
+                .frame(width: 140, height: 140)
                 .clipped()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -63,6 +63,7 @@ struct RunCardView: View {
                     
                     Spacer()
                     
+                    // Metadata section - simplified layout
                     VStack(alignment: .trailing, spacing: 4) {
                         // Date
                         Text(formatDateForDisplay(run.date))
@@ -70,11 +71,11 @@ struct RunCardView: View {
                             .foregroundColor(.white.opacity(0.9))
                             .shadow(color: .black.opacity(0.6), radius: 1)
                         
-                        // Music indicator with song count
+                        // Music indicator with song count and power song
                         if let tracks = run.spotifyTracks, !tracks.isEmpty {
                             HStack(spacing: 4) {
                                 Image(systemName: "music.note")
-                                    .font(.system(size: 14))
+                                    .font(.system(size: 12))
                                     .foregroundColor(.green)
                                     .shadow(color: .black.opacity(0.6), radius: 1)
                                 
@@ -83,6 +84,13 @@ struct RunCardView: View {
                                     .fontWeight(.medium)
                                     .foregroundColor(.green)
                                     .shadow(color: .black.opacity(0.6), radius: 1)
+                                
+                                // Power song fire emoji
+                                if run.powerSong != nil {
+                                    Text("🔥")
+                                        .font(.system(size: 12))
+                                        .shadow(color: .black.opacity(0.6), radius: 1)
+                                }
                             }
                         }
                         

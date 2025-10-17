@@ -106,7 +106,9 @@ struct CanvasAsset: Identifiable, Equatable, Codable {
     var scale: Double = 1.0
     var fontSize: CGFloat = 16
     var fontWeight: Font.Weight = .regular
+    var fontFamily: String? = nil
     var color: Color = .white
+    var showBlackOutline: Bool = false
     var isVisible: Bool = true
     var isSelected: Bool = false
     var zIndex: Double = 1.0
@@ -118,7 +120,7 @@ struct CanvasAsset: Identifiable, Equatable, Codable {
     
     // Custom coding for UUID and complex types
     enum CodingKeys: String, CodingKey {
-        case type, content, position, rotation, scale, fontSize, fontWeight, color
+        case type, content, position, rotation, scale, fontSize, fontWeight, fontFamily, color, showBlackOutline
         case isVisible, isSelected, zIndex, editableType, canDelete, canDuplicate
     }
     

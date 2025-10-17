@@ -370,9 +370,31 @@ struct RunCardStackView: View {
                 logger.info("🌐 No tracks in Firebase for recent run, falling back to Spotify API")
                 do {
                     let recentTracks = try await spotifyService.fetchRecentTracks(limit: 50)
+                    
+                    // Debug: Log run time window
+                    logger.info("🕐 Run time window: \(run.date) to \(endTime)")
+                    logger.info("🕐 Run duration: \(run.elapsedTime) seconds")
+                    
+                    // Debug: Log first few tracks to see their timing
+                    if !recentTracks.isEmpty {
+                        logger.info("🎵 Recent tracks from Spotify API:")
+                        for (index, track) in recentTracks.prefix(3).enumerated() {
+                            logger.info("  \(index + 1). '\(track.name)' at \(track.playedAt)")
+                        }
+                    }
+                    
                     tracks = recentTracks.filter { track in
                         let trackTime = track.playedAt
-                        return trackTime >= run.date && trackTime <= endTime
+                        let isInRange = trackTime >= run.date && trackTime <= endTime
+                        
+                        // Debug: Log why tracks are being filtered out
+                        if !isInRange {
+                            let timeDiffStart = trackTime.timeIntervalSince(run.date)
+                            let timeDiffEnd = trackTime.timeIntervalSince(endTime)
+                            logger.info("⏰ Track '\(track.name)' at \(trackTime) excluded - start diff: \(timeDiffStart)s, end diff: \(timeDiffEnd)s")
+                        }
+                        
+                        return isInRange
                     }
                     logger.info("🌐 Found \(tracks.count) tracks from Spotify API for time range")
                 } catch {
@@ -390,7 +412,16 @@ struct RunCardStackView: View {
                 if let mainIndex = self.runs.firstIndex(where: { $0.id == runId }) {
                     // CRITICAL FIX: Create a copy of the run with updated tracks to trigger SwiftUI change detection
                     var updatedRun = self.runs[mainIndex]
-                    updatedRun.spotifyTracks = tracks
+                    
+                    // PREVENT DATA LOSS: Only update if we have more tracks than before
+                    let existingTrackCount = updatedRun.spotifyTracks?.count ?? 0
+                    if tracks.count >= existingTrackCount {
+                        updatedRun.spotifyTracks = tracks
+                        logger.info("🎵 UPDATING: \(runName) tracks: \(existingTrackCount) → \(tracks.count)")
+                    } else {
+                        logger.info("🚫 SKIPPING: \(runName) already has \(existingTrackCount) tracks, not replacing with \(tracks.count)")
+                        return // Don't update anything if we're downgrading the data
+                    }
                     
                     // Replace the entire run object to ensure SwiftUI detects the change
                     self.runs[mainIndex] = updatedRun
@@ -402,7 +433,19 @@ struct RunCardStackView: View {
                     logger.info("🔍 DEBUG: Immediate verification - runs[\(mainIndex)] now has \(verifyCount) tracks")
                     
                     // Calculate power song if we have tracks and route data
-                    if !tracks.isEmpty && !updatedRun.routeCoordinates.isEmpty {
+                    print("🔥 POWER SONG DEBUG: Checking conditions for run \(runName)")
+                    print("🔥 POWER SONG DEBUG: tracks.isEmpty = \(!tracks.isEmpty), routeCoordinates.isEmpty = \(!updatedRun.routeCoordinates.isEmpty)")
+                    print("🔥 POWER SONG DEBUG: tracks count = \(tracks.count), routeCoordinates count = \(updatedRun.routeCoordinates.count)")
+                    
+                    // Only calculate power song if we have more tracks than before (prevent overwriting good data with empty data)
+                    let previousTrackCount = updatedRun.spotifyTracks?.count ?? 0
+                    let shouldCalculatePowerSong = !tracks.isEmpty && !updatedRun.routeCoordinates.isEmpty && tracks.count >= previousTrackCount
+                    
+                    print("🔥 POWER SONG DEBUG: shouldCalculatePowerSong = \(shouldCalculatePowerSong)")
+                    print("🔥 POWER SONG DEBUG: tracks.count = \(tracks.count), previousTrackCount = \(previousTrackCount)")
+                    
+                    if shouldCalculatePowerSong {
+                        print("🔥 POWER SONG DEBUG: Starting calculation for \(runName)")
                         // Fetch streams and calculate power song
                         Task.detached(priority: .background) {
                             do {
@@ -443,7 +486,16 @@ struct RunCardStackView: View {
                 if let swipedIndex = self.swipedRuns.firstIndex(where: { $0.id == runId }) {
                     // CRITICAL FIX: Create a copy of the run with updated tracks to trigger SwiftUI change detection
                     var updatedRun = self.swipedRuns[swipedIndex]
-                    updatedRun.spotifyTracks = tracks
+                    
+                    // PREVENT DATA LOSS: Only update if we have more tracks than before
+                    let existingTrackCount = updatedRun.spotifyTracks?.count ?? 0
+                    if tracks.count >= existingTrackCount {
+                        updatedRun.spotifyTracks = tracks
+                        logger.info("🎵 UPDATING SWIPED: \(runName) tracks: \(existingTrackCount) → \(tracks.count)")
+                    } else {
+                        logger.info("🚫 SKIPPING SWIPED: \(runName) already has \(existingTrackCount) tracks, not replacing with \(tracks.count)")
+                        return // Don't update anything if we're downgrading the data
+                    }
                     
                     // Replace the entire run object to ensure SwiftUI detects the change
                     self.swipedRuns[swipedIndex] = updatedRun
@@ -490,13 +542,18 @@ struct RunCardStackView: View {
                 if tracks.count > 0 {
                     logger.info("✅ Progressive load complete for '\(runName)' with \(tracks.count) tracks")
                     
-                    // Update the cache with enriched data so future loads show complete metadata
+                    // Enrich album art for tracks that need it
                     if let currentRun = self.runs.first(where: { $0.id == runId }) ?? 
                                         self.swipedRuns.first(where: { $0.id == runId }) {
-                        Task.detached(priority: .background) {
-                            await RunCacheService.shared.updateCachedRun(currentRun)
+                        print("🎨 PROGRESSIVE LOAD: Triggering album art enrichment for run: \(runName)")
+                        Task {
+                            await self.enrichAlbumArtForRunInArray(runId: runId)
                         }
+                    } else {
+                        print("🎨 PROGRESSIVE LOAD: Could not find run \(runId) in arrays for album art enrichment")
                     }
+                } else {
+                    print("🎨 PROGRESSIVE LOAD: No tracks loaded for \(runName), skipping album art enrichment")
                 }
                 
                 // Verification - check if the update worked
@@ -534,35 +591,9 @@ struct RunCardStackView: View {
             .gesture(isTopCard ? dragGesture : nil)
             .onTapGesture {
                 if isTopCard {
-                    logger.info("🎯 Tapping on run card: \(run.name) (ID: \(run.id))")
-                    
-                    // Find the current run with loaded Spotify data from both arrays
-                    var currentRun: RunActivity?
-                    var foundLocation = "nowhere"
-                    
-                    // First check the main runs array
-                    if let foundInMain = runs.first(where: { $0.id == run.id }) {
-                        currentRun = foundInMain
-                        foundLocation = "main array"
-                        logger.info("🔍 DEBUG: Found in main array at index \(runs.firstIndex(where: { $0.id == run.id }) ?? -1)")
-                        logger.info("🔍 DEBUG: Main array run has \(foundInMain.spotifyTracks?.count ?? -1) tracks")
-                    }
-                    // Also check swipedRuns in case it was moved there
-                    else if let foundInSwiped = swipedRuns.first(where: { $0.id == run.id }) {
-                        currentRun = foundInSwiped
-                        foundLocation = "swiped array"
-                    }
-                    
-                    if let foundRun = currentRun {
-                        let trackCount = foundRun.spotifyTracks?.count ?? 0
-                        logger.info("🎯 Navigation: Using run from \(foundLocation) with \(trackCount) tracks")
-                        selectedRun = foundRun
-                        navigationPath.append(foundRun)
-                    } else {
-                        logger.warning("🎯 Navigation: Using original run parameter with \(run.spotifyTracks?.count ?? 0) tracks")
-                        selectedRun = run
-                        navigationPath.append(run)
-                    }
+                    // PERFORMANCE FIX: Skip complex searches, just use the run directly
+                    selectedRun = run
+                    navigationPath.append(run)
                 }
             }
             .onAppear {
@@ -900,6 +931,14 @@ struct RunCardStackView: View {
                     logger.info("🎵 Loading Spotify tracks for first 3 visible cards only")
                     let visibleCardLimit = min(3, runActivities.count)
                     for i in 0..<visibleCardLimit {
+                        // CRITICAL FIX: Check if cached run already has Spotify tracks
+                        let existingTrackCount = runActivities[i].spotifyTracks?.count ?? 0
+                        if existingTrackCount > 0 {
+                            logger.info("🎵 CACHED: Run '\(runActivities[i].name)' already has \(existingTrackCount) tracks from cache - preserving")
+                            continue
+                        }
+                        
+                        logger.info("🎵 FETCH: Run '\(runActivities[i].name)' has no tracks, fetching from Firebase...")
                         let endTime = runActivities[i].date.addingTimeInterval(runActivities[i].elapsedTime)
                         var tracks = await spotifyService.fetchImportedTracksForTimeRange(
                             startTime: runActivities[i].date,
@@ -912,9 +951,31 @@ struct RunCardStackView: View {
                             logger.info("🌐 No tracks in Firebase for recent run, falling back to Spotify API")
                             do {
                                 let recentTracks = try await spotifyService.fetchRecentTracks(limit: 50)
+                                
+                                // Debug: Log run time window
+                                logger.info("🕐 Run time window: \(runActivities[i].date) to \(endTime)")
+                                logger.info("🕐 Run duration: \(runActivities[i].elapsedTime) seconds")
+                                
+                                // Debug: Log first few tracks to see their timing
+                                if !recentTracks.isEmpty {
+                                    logger.info("🎵 Recent tracks from Spotify API:")
+                                    for (index, track) in recentTracks.prefix(3).enumerated() {
+                                        logger.info("  \(index + 1). '\(track.name)' at \(track.playedAt)")
+                                    }
+                                }
+                                
                                 tracks = recentTracks.filter { track in
                                     let trackTime = track.playedAt
-                                    return trackTime >= runActivities[i].date && trackTime <= endTime
+                                    let isInRange = trackTime >= runActivities[i].date && trackTime <= endTime
+                                    
+                                    // Debug: Log why tracks are being filtered out
+                                    if !isInRange {
+                                        let timeDiffStart = trackTime.timeIntervalSince(runActivities[i].date)
+                                        let timeDiffEnd = trackTime.timeIntervalSince(endTime)
+                                        logger.info("⏰ Track '\(track.name)' at \(trackTime) excluded - start diff: \(timeDiffStart)s, end diff: \(timeDiffEnd)s")
+                                    }
+                                    
+                                    return isInRange
                                 }
                                 logger.info("🌐 Found \(tracks.count) tracks from Spotify API for time range")
                             } catch {
@@ -924,6 +985,25 @@ struct RunCardStackView: View {
                         
                         runActivities[i].spotifyTracks = tracks
                         logger.info("🎵 Loaded \(tracks.count) tracks for run: \(runActivities[i].name)")
+                        
+                        // Enrich album art for tracks that need it
+                        if !tracks.isEmpty {
+                            print("🎨 CACHE LOAD: Checking album art for run: \(runActivities[i].name)")
+                            let tracksNeedingArt = tracks.filter { track in
+                                track.albumImageURL?.isEmpty != false
+                            }
+                            if !tracksNeedingArt.isEmpty {
+                                print("🎨 CACHE LOAD: \(tracksNeedingArt.count) tracks need album art enrichment")
+                                // Trigger album art enrichment after the runs are added to the UI
+                                Task {
+                                    // Give the UI a moment to update, then enrich
+                                    try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                                    await self.enrichAlbumArtForRunInArray(runId: runActivities[i].id)
+                                }
+                            } else {
+                                print("🎨 CACHE LOAD: All tracks already have album art")
+                            }
+                        }
                         
                         // Calculate power song if we have tracks and route data
                         if !tracks.isEmpty && !runActivities[i].routeCoordinates.isEmpty {
@@ -946,6 +1026,26 @@ struct RunCardStackView: View {
                         self.runs.sort { $0.date > $1.date }
                     }
                     
+                    // DEBUG: Check if runs have tracks but missing album art
+                    print("🎨 RUNS LOADED DEBUG: Checking \(self.runs.count) runs for missing album art")
+                    for run in self.runs.prefix(3) {
+                        let trackCount = run.spotifyTracks?.count ?? 0
+                        if trackCount > 0 {
+                            let tracksWithArt = run.spotifyTracks?.filter { $0.albumImageURL == nil || $0.albumImageURL!.isEmpty }.count ?? 0
+                            print("🎨 Run '\(run.name)': \(trackCount) tracks, \(tracksWithArt) need album art")
+                            
+                            // If tracks exist but need album art, trigger enrichment
+                            if tracksWithArt > 0 {
+                                print("🎨 MANUAL TRIGGER: Starting album art enrichment for: \(run.name)")
+                                Task {
+                                    await self.enrichAlbumArtForRunInArray(runId: run.id)
+                                }
+                            }
+                        } else {
+                            print("🎨 Run '\(run.name)': No tracks loaded")
+                        }
+                    }
+                    
                     // Debug: Log the first 5 runs with their dates
                     let dateFormatter = DateFormatter()
                     dateFormatter.dateFormat = "MMM d, yyyy HH:mm"
@@ -965,11 +1065,11 @@ struct RunCardStackView: View {
                     }
                 }
                 
-                // TEMPORARILY DISABLED: Photo assignment causing touch issues on device
-                // Task.detached(priority: .background) {
-                //     await self.assignBackgroundPhotos()
-                // }
-                logger.warning("⚠️ Photo assignment disabled for debugging touch issues")
+                // Auto-assign photo backgrounds for runs without custom backgrounds
+                Task.detached(priority: .background) {
+                    await self.assignBackgroundPhotos()
+                }
+                logger.info("📷 Starting automatic photo background assignment")
                 
             } catch {
                 await MainActor.run {
@@ -986,6 +1086,9 @@ struct RunCardStackView: View {
     private func updateRunBackground(runId: String, photoBackground: RunPhotoBackground) {
         if let index = runs.firstIndex(where: { $0.id == runId }) {
             runs[index].portraitSettings.backgroundPhoto = photoBackground
+            logger.info("📷 ✅ Updated background photo for run '\(runs[index].name)' at index \(index)")
+        } else {
+            logger.warning("📷 ❌ Could not find run with ID \(runId) to update background")
         }
     }
     
@@ -1174,6 +1277,101 @@ struct RunCardStackView: View {
             print("Error checking for existing Firebase account: \(error)")
         }
     }
+    
+    // MARK: - Album Art Enrichment
+    
+    @MainActor
+    private func enrichAlbumArtForRunInArray(runId: String) async {
+        print("🎨 Starting album art enrichment for run ID: \(runId)")
+        
+        // First, check Spotify authentication status
+        print("🎨 Spotify authentication status: \(SpotifyService.shared.isAuthenticated)")
+        guard SpotifyService.shared.isAuthenticated else {
+            print("🚨 Spotify not authenticated - cannot enrich album art")
+            return
+        }
+        
+        // Find the run in either array
+        var runActivity: RunActivity
+        var isInMainArray = false
+        
+        if let mainIndex = runs.firstIndex(where: { $0.id == runId }) {
+            runActivity = runs[mainIndex]
+            isInMainArray = true
+        } else if let swipedIndex = swipedRuns.firstIndex(where: { $0.id == runId }) {
+            runActivity = swipedRuns[swipedIndex]
+            isInMainArray = false
+        } else {
+            print("🚨 Could not find run with ID: \(runId)")
+            return
+        }
+        
+        guard let tracks = runActivity.spotifyTracks, !tracks.isEmpty else {
+            print("🎨 No tracks available for enrichment")
+            return
+        }
+        
+        // Find tracks that need album art enrichment (empty/nil albumImageURL)
+        let tracksNeedingEnrichment = tracks.filter { track in
+            let needsEnrichment = track.albumImageURL == nil || track.albumImageURL!.isEmpty
+            if needsEnrichment {
+                print("🎨 Track '\(track.name)' needs enrichment - albumImageURL: \(track.albumImageURL ?? "nil")")
+            }
+            return needsEnrichment
+        }
+        
+        print("🎨 Found \(tracksNeedingEnrichment.count) tracks needing album art enrichment out of \(tracks.count) total")
+        
+        guard !tracksNeedingEnrichment.isEmpty else {
+            print("🎨 All tracks already have album art URLs - no enrichment needed")
+            return
+        }
+        
+        do {
+            print("🎨 Calling SpotifyService.enrichTracksWithAlbumArt for \(tracksNeedingEnrichment.count) tracks...")
+            let enrichedTracks = await SpotifyService.shared.enrichTracksWithAlbumArt(tracksNeedingEnrichment)
+            print("🎨 Successfully enriched \(enrichedTracks.count) tracks with album art")
+            
+            // Update the tracks with enriched data
+            var updatedTracks = tracks
+            var successfulUpdates = 0
+            
+            for enrichedTrack in enrichedTracks {
+                if let index = updatedTracks.firstIndex(where: { $0.id == enrichedTrack.id }) {
+                    updatedTracks[index] = enrichedTrack
+                    successfulUpdates += 1
+                    print("🎨 ✅ Updated track '\(enrichedTrack.name)' with album art URL: \(enrichedTrack.albumImageURL ?? "nil")")
+                }
+            }
+            
+            if successfulUpdates > 0 {
+                // Update the run in the appropriate array to trigger UI refresh
+                runActivity.spotifyTracks = updatedTracks
+                
+                if isInMainArray, let mainIndex = runs.firstIndex(where: { $0.id == runId }) {
+                    runs[mainIndex] = runActivity
+                } else if !isInMainArray, let swipedIndex = swipedRuns.firstIndex(where: { $0.id == runId }) {
+                    swipedRuns[swipedIndex] = runActivity
+                }
+                
+                print("🎨 ✅ Album art enrichment completed successfully - updated \(successfulUpdates) tracks")
+                
+                // Update cache with enriched data
+                Task.detached(priority: .background) {
+                    await RunCacheService.shared.updateCachedRun(runActivity)
+                }
+            } else {
+                print("🎨 ⚠️ No tracks were successfully updated")
+            }
+            
+        } catch {
+            print("🚨 Failed to enrich album art: \(error)")
+            print("🚨 Error details: \(error.localizedDescription)")
+            if let error = error as NSError? {
+                print("🚨 Error domain: \(error.domain), code: \(error.code)")
+            }
+        }
+    }
 }
 
 // MARK: - Supporting Views
@@ -1248,6 +1446,7 @@ struct SimpleRunCanvasView: View {
     @State private var assets: [CanvasAsset] = []
     @State private var selectedAsset: CanvasAsset?
     @State private var showingAddAssetMenu = false
+    @State private var showingEditSheet = false
     
     var body: some View {
         GeometryReader { geometry in
@@ -1282,6 +1481,11 @@ struct SimpleRunCanvasView: View {
                             isSelected: selectedAsset?.id == asset.id,
                             onSelect: {
                                 selectedAsset = asset
+                            },
+                            onUpdate: { updatedAsset in
+                                if let index = assets.firstIndex(where: { $0.id == updatedAsset.id }) {
+                                    assets[index] = updatedAsset
+                                }
                             }
                         )
                     }
@@ -1308,25 +1512,49 @@ struct SimpleRunCanvasView: View {
                     
                     Spacer()
                     
-                    // Add asset button - centered at bottom
+                    // Control buttons at bottom
                     VStack {
                         Spacer()
                         
-                        Button {
-                            showingAddAssetMenu = true
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundColor(.white)
-                                .frame(width: 44, height: 44)
-                                .background(
-                                    Capsule()
-                                        .fill(Color.gray.opacity(0.3))
-                                        .overlay(
+                        HStack(spacing: 16) {
+                            // Edit button - only visible when an element is selected
+                            if selectedAsset != nil && selectedAsset?.type == .songList {
+                                Button {
+                                    showingEditSheet = true
+                                } label: {
+                                    Image(systemName: "pencil")
+                                        .font(.system(size: 18, weight: .medium))
+                                        .foregroundColor(.white)
+                                        .frame(width: 44, height: 44)
+                                        .background(
                                             Capsule()
-                                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                                .fill(Color.blue.opacity(0.6))
+                                                .overlay(
+                                                    Capsule()
+                                                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                                )
                                         )
-                                )
+                                }
+                                .transition(.scale.combined(with: .opacity))
+                            }
+                            
+                            // Add asset button
+                            Button {
+                                showingAddAssetMenu = true
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 18, weight: .medium))
+                                    .foregroundColor(.white)
+                                    .frame(width: 44, height: 44)
+                                    .background(
+                                        Capsule()
+                                            .fill(Color.gray.opacity(0.3))
+                                            .overlay(
+                                                Capsule()
+                                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                            )
+                                    )
+                            }
                         }
                         .padding(.bottom, 20)
                     }
@@ -1335,6 +1563,8 @@ struct SimpleRunCanvasView: View {
             .onAppear {
                 canvasSize = geometry.size
                 setupSimpleAssets()
+                // Calculate power song if needed
+                calculatePowerSongIfNeeded()
             }
         }
         .navigationBarHidden(true)
@@ -1344,6 +1574,20 @@ struct SimpleRunCanvasView: View {
                     addNewAsset(type: type)
                 }
             )
+        }
+        .sheet(isPresented: $showingEditSheet) {
+            if let selectedAsset = selectedAsset, selectedAsset.type == .songList {
+                SongListEditSheet(
+                    run: run,
+                    asset: selectedAsset,
+                    onSave: { updatedAsset in
+                        if let index = assets.firstIndex(where: { $0.id == updatedAsset.id }) {
+                            assets[index] = updatedAsset
+                        }
+                        showingEditSheet = false
+                    }
+                )
+            }
         }
     }
     
@@ -1371,7 +1615,7 @@ struct SimpleRunCanvasView: View {
         let statsAsset = CanvasAsset(
             type: .stats,
             content: .stats(statsCluster),
-            position: CGPoint(x: canvasSize.width - 12, y: canvasSize.height * 0.05)
+            position: CGPoint(x: canvasSize.width - 120, y: canvasSize.height * 0.05)
         )
         newAssets.append(statsAsset)
         
@@ -1380,7 +1624,7 @@ struct SimpleRunCanvasView: View {
             let locationAsset = CanvasAsset(
                 type: .location,
                 content: .location(location.lowercased()),
-                position: CGPoint(x: canvasSize.width - 12, y: canvasSize.height * 0.1),
+                position: CGPoint(x: canvasSize.width - 120, y: canvasSize.height * 0.1),
                 fontSize: 12,
                 fontWeight: .medium,
                 color: .orange
@@ -1432,12 +1676,22 @@ struct SimpleRunCanvasView: View {
         }
         
         // Add power song if available - right-aligned with screen edge
+        print("🔥 DEBUG: Checking power song for run: \(run.name)")
+        print("🔥 DEBUG: run.powerSong exists: \(run.powerSong != nil)")
+        if let powerSong = run.powerSong {
+            print("🔥 DEBUG: Power song found: \(powerSong.name) by \(powerSong.artist)")
+        }
+        print("🔥 DEBUG: run.powerSongPacePerMile: \(run.powerSongPacePerMile ?? "nil")")
+        
         if let powerSongAsset = CanvasAsset.createPowerSong(
             for: run, 
-            // Position so right edge aligns with screen edge (estimate width ~160px, so center at width - 80)
-            position: CGPoint(x: canvasSize.width - 120, y: canvasSize.height * 0.85)
+            // Position power song more conservatively to ensure it's fully visible
+            position: CGPoint(x: canvasSize.width * 0.5, y: canvasSize.height * 0.75)
         ) {
+            print("🔥 DEBUG: Power song asset created successfully")
             newAssets.append(powerSongAsset)
+        } else {
+            print("🔥 DEBUG: Failed to create power song asset - no power song data")
         }
         
         // Add album art for albums with 3+ songs
@@ -1534,7 +1788,6 @@ struct SimpleRunCanvasView: View {
         }
     }
     
-    // MARK: - Album Art Enrichment
     
     @MainActor
     private func enrichAlbumArtForRun(_ runActivity: RunActivity) async {
@@ -1554,7 +1807,7 @@ struct SimpleRunCanvasView: View {
         
         // Find tracks that need album art enrichment (empty/nil albumImageURL)
         let tracksNeedingEnrichment = tracks.filter { track in
-            let needsEnrichment = track.albumImageURL?.isEmpty != false
+            let needsEnrichment = track.albumImageURL == nil || track.albumImageURL!.isEmpty
             if needsEnrichment {
                 print("🎨 Track '\(track.name)' needs enrichment - albumImageURL: \(track.albumImageURL ?? "nil")")
             }
@@ -1611,6 +1864,61 @@ struct SimpleRunCanvasView: View {
             }
         }
     }
+    
+    // MARK: - Power Song Calculation
+    
+    private func calculatePowerSongIfNeeded() {
+        // Only calculate if Power Song is not already calculated
+        guard run.powerSong == nil else {
+            print("🔥 POWER SONG: Already calculated for run: \(run.name)")
+            return
+        }
+        
+        // Only calculate if we have Spotify tracks
+        guard let tracks = run.spotifyTracks, !tracks.isEmpty else {
+            print("🔥 POWER SONG: No Spotify tracks available for run: \(run.name)")
+            return
+        }
+        
+        // Limit to recent runs (30 days for on-demand calculation)
+        let runAge = Date().timeIntervalSince(run.date)
+        let maxAgeForOnDemand = 30 * 24 * 60 * 60.0 // 30 days in seconds
+        
+        guard runAge <= maxAgeForOnDemand else {
+            print("🔥 POWER SONG: Run too old for on-demand calculation: \(run.name)")
+            return
+        }
+        
+        print("🔥 POWER SONG: Starting calculation for run: \(run.name)")
+        
+        Task {
+            do {
+                guard let activityId = Int(run.id) else {
+                    print("🔥 POWER SONG: Invalid activity ID: \(run.id)")
+                    return
+                }
+                
+                let streams = try await StravaService.shared.fetchActivityStreams(id: activityId, types: ["time", "latlng"])
+                
+                await MainActor.run {
+                    // Calculate Power Song using the same logic
+                    DataConversionService.shared.calculatePowerSong(for: &run, from: streams)
+                    
+                    if let powerSong = run.powerSong {
+                        let pace = run.powerSongPacePerMile ?? "Unknown"
+                        print("🔥 POWER SONG SUCCESS: '\(powerSong.name)' by \(powerSong.artist) - Pace: \(pace)")
+                        
+                        // Update the assets to include the new power song
+                        setupSimpleAssets()
+                    } else {
+                        print("🔥 POWER SONG: No Power Song calculated for \(run.name)")
+                    }
+                }
+            } catch {
+                print("🔥 POWER SONG ERROR: Failed to calculate for \(run.name): \(error)")
+            }
+        }
+    }
 }
 
 struct SimpleAddAssetMenu: View {
@@ -1660,6 +1968,9 @@ struct SimpleAssetView: View {
     let asset: CanvasAsset
     let isSelected: Bool
     let onSelect: () -> Void
+    let onUpdate: (CanvasAsset) -> Void
+    
+    @State private var dragOffset: CGSize = .zero
     
     var body: some View {
         GeometryReader { geometry in
@@ -1671,17 +1982,17 @@ struct SimpleAssetView: View {
                         statsClusterView
                     }
                     .frame(width: geometry.size.width, alignment: .trailing)
-                    .position(x: geometry.size.width / 2, y: asset.position.y)
+                    .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
                 case .location:
                     HStack {
                         Spacer()
                         locationAssetView
                     }
                     .frame(width: geometry.size.width, alignment: .trailing)
-                    .position(x: geometry.size.width / 2, y: asset.position.y)
+                    .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
                 case .titleDistance:
                     titleDistanceAssetView
-                        .position(asset.position)
+                        .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
                 case .songList:
                     HStack {
                         songListAssetView
@@ -1701,7 +2012,7 @@ struct SimpleAssetView: View {
                         Spacer()
                     }
                     .frame(width: geometry.size.width, alignment: .leading)
-                    .position(x: geometry.size.width / 2, y: asset.position.y)
+                    .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
                 case .powerSong:
                     HStack {
                         Spacer()
@@ -1721,7 +2032,7 @@ struct SimpleAssetView: View {
                             )
                     }
                     .frame(width: geometry.size.width, alignment: .trailing)
-                    .position(x: geometry.size.width / 2, y: asset.position.y)
+                    .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
                 case .route:
                     routeAssetView
                         .overlay(
@@ -1737,7 +2048,7 @@ struct SimpleAssetView: View {
                                 }
                             }
                         )
-                        .position(asset.position)
+                        .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
                 case .albumArt:
                     albumArtAssetView
                         .overlay(
@@ -1753,16 +2064,33 @@ struct SimpleAssetView: View {
                                 }
                             }
                         )
-                        .position(asset.position)
+                        .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
                 default:
                     textAssetView
-                        .position(asset.position)
+                        .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
                 }
             }
         }
         .onTapGesture {
             onSelect()
         }
+        .gesture(
+            isSelected ? 
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    dragOffset = value.translation
+                }
+                .onEnded { value in
+                    // Update the asset position - all assets use the same direct positioning
+                    var updatedAsset = asset
+                    updatedAsset.position.x += value.translation.width
+                    updatedAsset.position.y += value.translation.height
+                    
+                    onUpdate(updatedAsset)
+                    dragOffset = .zero
+                }
+            : nil
+        )
     }
     
     private var textAssetView: some View {
@@ -1901,7 +2229,7 @@ struct SimpleAssetView: View {
         Group {
             if case .songList(let tracks, let powerSongId) = asset.content {
                 VStack(alignment: .leading, spacing: 1) {
-                    ForEach(Array(tracks.prefix(10).enumerated()), id: \.offset) { index, track in
+                    ForEach(Array(tracks.enumerated()), id: \.offset) { index, track in
                         let isPowerSong = track.id == powerSongId
                         
                         HStack(spacing: 12) {
@@ -1917,15 +2245,17 @@ struct SimpleAssetView: View {
                             }
                             
                             Text("\(track.name.lowercased()) - \(track.artist.lowercased())")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundColor(isPowerSong ? .orange : .white)
+                                .font(.custom(asset.fontFamily ?? "Helvetica Neue", size: 14))
+                                .fontWeight(.medium)
+                                .foregroundColor(isPowerSong ? .orange : asset.color)
+                                .shadow(color: asset.showBlackOutline ? .black : .clear, radius: asset.showBlackOutline ? 1 : 0)
                                 .lineLimit(1)
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(
                             Rectangle()
-                                .fill(Color.black)
+                                .fill(asset.showBlackOutline ? Color.black : Color.clear)
                         )
                     }
                 }
@@ -2069,6 +2399,285 @@ struct SimpleAssetView: View {
         let romanNumerals = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", 
                            "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx"]
         return number <= romanNumerals.count ? romanNumerals[number - 1] : "\(number)"
+    }
+}
+
+// MARK: - Song List Edit Sheet
+
+struct SongListEditSheet: View {
+    let run: RunActivity
+    let asset: CanvasAsset
+    let onSave: (CanvasAsset) -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedSongs: Set<String> = []
+    @State private var selectedFont: String = "Helvetica Neue"
+    @State private var textColor: Color = .white
+    @State private var showBlackOutline: Bool = true
+    
+    private let availableFonts = [
+        ("Helvetica Neue", "HelveticaNeue"),
+        ("Arial", "Arial"),
+        ("Georgia", "Georgia"),
+        ("Times New Roman", "TimesNewRomanPSMT"),
+        ("Futura", "Futura"),
+        ("Avenir", "Avenir")
+    ]
+    private let maxSongs = 20
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                // Header
+                VStack(spacing: 16) {
+                    Text("Edit Song List")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    
+                    // Preview Section with sample track
+                    VStack(spacing: 12) {
+                        Text("Preview")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        
+                        // Preview card showing how the font/color will look
+                        HStack(spacing: 12) {
+                            Text("i")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.white)
+                                .frame(width: 24, alignment: .leading)
+                            
+                            Text("sample track - artist name")
+                                .font(.custom(selectedFont == "Helvetica Neue" ? "HelveticaNeue" : selectedFont, size: 14))
+                                .fontWeight(.medium)
+                                .foregroundColor(textColor)
+                                .shadow(color: showBlackOutline ? .black : .clear, radius: showBlackOutline ? 1 : 0)
+                                .lineLimit(1)
+                            
+                            Spacer()
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.black.opacity(0.8))
+                        )
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                
+                Divider()
+                    .padding(.vertical, 16)
+                
+                ScrollView {
+                    VStack(spacing: 24) {
+                        // Song Selection Section
+                        VStack(alignment: .leading, spacing: 16) {
+                            HStack {
+                                Text("Songs (\(selectedSongs.count)/\(maxSongs))")
+                                    .font(.headline)
+                                
+                                Spacer()
+                                
+                                // Select All / Clear buttons
+                                HStack(spacing: 12) {
+                                    Button("Clear") {
+                                        selectedSongs.removeAll()
+                                    }
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                    .disabled(selectedSongs.isEmpty)
+                                    
+                                    Button("Select First 10") {
+                                        selectFirst10()
+                                    }
+                                    .font(.subheadline)
+                                    .foregroundColor(.blue)
+                                }
+                            }
+                            
+                            // Song list
+                            if let tracks = run.spotifyTracks, !tracks.isEmpty {
+                                LazyVStack(spacing: 6) {
+                                    ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+                                        HStack(spacing: 12) {
+                                            Button {
+                                                toggleSongSelection(track.id)
+                                            } label: {
+                                                Image(systemName: selectedSongs.contains(track.id) ? "checkmark.circle.fill" : "circle")
+                                                    .foregroundColor(selectedSongs.contains(track.id) ? .blue : .gray)
+                                                    .font(.title3)
+                                            }
+                                            
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(track.name)
+                                                    .font(.system(size: 15, weight: .medium))
+                                                    .lineLimit(1)
+                                                Text(track.artist)
+                                                    .font(.system(size: 13))
+                                                    .foregroundColor(.secondary)
+                                                    .lineLimit(1)
+                                            }
+                                            
+                                            Spacer()
+                                            
+                                            if track.id == run.powerSong?.id {
+                                                Text("🔥")
+                                                    .font(.system(size: 16))
+                                            }
+                                        }
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 12)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .fill(selectedSongs.contains(track.id) ? Color.blue.opacity(0.1) : Color(.systemGray6))
+                                        )
+                                        .animation(.easeInOut(duration: 0.2), value: selectedSongs.contains(track.id))
+                                    }
+                                }
+                            } else {
+                                Text("No songs available")
+                                    .foregroundColor(.secondary)
+                                    .padding()
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        
+                        // Styling Section
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text("Styling")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                            VStack(spacing: 20) {
+                                // Font picker with previews
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("Font")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.secondary)
+                                    
+                                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2), spacing: 8) {
+                                        ForEach(availableFonts, id: \.0) { fontName, fontIdentifier in
+                                            Button {
+                                                selectedFont = fontName
+                                            } label: {
+                                                Text(fontName)
+                                                    .font(.custom(fontIdentifier, size: 16))
+                                                    .foregroundColor(.primary)
+                                                    .frame(maxWidth: .infinity)
+                                                    .padding(.vertical, 12)
+                                                    .background(
+                                                        RoundedRectangle(cornerRadius: 8)
+                                                            .fill(selectedFont == fontName ? Color.blue.opacity(0.2) : Color(.systemGray6))
+                                                            .overlay(
+                                                                RoundedRectangle(cornerRadius: 8)
+                                                                    .stroke(selectedFont == fontName ? Color.blue : Color.clear, lineWidth: 2)
+                                                            )
+                                                    )
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                }
+                                
+                                // Text color picker
+                                HStack {
+                                    Text("Text Color")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                    ColorPicker("", selection: $textColor)
+                                        .frame(width: 44, height: 32)
+                                }
+                                
+                                // Black outline toggle
+                                HStack {
+                                    Text("Text Shadow")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                    Toggle("", isOn: $showBlackOutline)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 20)
+                    }
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        saveChanges()
+                    }
+                    .fontWeight(.semibold)
+                    .disabled(selectedSongs.isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.height(600), .large])
+        .presentationDragIndicator(.visible)
+        .onAppear {
+            setupInitialState()
+        }
+    }
+    
+    private func setupInitialState() {
+        // Initialize selected songs from the current asset
+        if case .songList(let tracks, _) = asset.content {
+            selectedSongs = Set(tracks.map { $0.id })
+        } else if let allTracks = run.spotifyTracks {
+            // If no specific selection, select first few songs up to maxSongs
+            selectedSongs = Set(allTracks.prefix(min(maxSongs, allTracks.count)).map { $0.id })
+        }
+        
+        // Initialize styling from current asset
+        textColor = asset.color
+        selectedFont = asset.fontFamily ?? "Helvetica Neue"
+        showBlackOutline = asset.showBlackOutline
+    }
+    
+    private func toggleSongSelection(_ songId: String) {
+        if selectedSongs.contains(songId) {
+            selectedSongs.remove(songId)
+        } else if selectedSongs.count < maxSongs {
+            selectedSongs.insert(songId)
+        }
+    }
+    
+    private func selectFirst10() {
+        guard let allTracks = run.spotifyTracks else { return }
+        selectedSongs = Set(allTracks.prefix(10).map { $0.id })
+    }
+    
+    private func saveChanges() {
+        guard let allTracks = run.spotifyTracks else { return }
+        
+        // Filter and order selected tracks
+        let filteredTracks = allTracks.filter { selectedSongs.contains($0.id) }
+        
+        // Create updated asset with new song selection and styling
+        var updatedAsset = asset
+        updatedAsset.content = .songList(tracks: filteredTracks, powerSongId: run.powerSong?.id)
+        
+        // Update the styling properties
+        updatedAsset.color = textColor
+        updatedAsset.fontFamily = selectedFont
+        updatedAsset.showBlackOutline = showBlackOutline
+        
+        onSave(updatedAsset)
+        dismiss()
     }
 }
 
