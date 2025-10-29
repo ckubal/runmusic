@@ -29,9 +29,17 @@ class PhotoService: ObservableObject {
         return status == .authorized || status == .limited
     }
     
+    // Debug logging control - set to true only when debugging
+    private let debugLoggingEnabled = false
+    
+    private func debugLog(_ message: String) {
+        if debugLoggingEnabled {
+            print(message)
+        }
+    }
+    
     func fetchPhotosForRun(date: Date, duration: TimeInterval) async -> [PHAsset] {
         guard authorizationStatus == .authorized || authorizationStatus == .limited else {
-            print("⚠️ Photo library access not authorized")
             return []
         }
         
@@ -39,23 +47,25 @@ class PhotoService: ObservableObject {
         dateFormatter.dateStyle = .medium
         dateFormatter.timeStyle = .short
         
-        print("📷 ========== PHOTO FETCH DEBUG ==========")
-        print("📷 Run date: \(dateFormatter.string(from: date))")
-        print("📷 Run duration: \(Int(duration/60)) minutes")
+        debugLog("📷 ========== PHOTO FETCH DEBUG ==========")
+        debugLog("📷 Run date: \(dateFormatter.string(from: date))")
+        debugLog("📷 Run duration: \(Int(duration/60)) minutes")
         
-        // Add timezone debugging for photo search
-        let utcFormatter = DateFormatter()
-        utcFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        utcFormatter.timeZone = TimeZone(abbreviation: "UTC")
-        
-        let pacificFormatter = DateFormatter()
-        pacificFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        pacificFormatter.timeZone = TimeZone(identifier: "America/Los_Angeles")
-        
-        print("📷 PHOTO TIMEZONE DEBUG:")
-        print("📷   Run date (UTC): \(utcFormatter.string(from: date))")
-        print("📷   Run date (Pacific): \(pacificFormatter.string(from: date))")
-        print("📷   System timezone: \(TimeZone.current.identifier)")
+        // Add timezone debugging for photo search (only when debugging)
+        if debugLoggingEnabled {
+            let utcFormatter = DateFormatter()
+            utcFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            utcFormatter.timeZone = TimeZone(abbreviation: "UTC")
+            
+            let pacificFormatter = DateFormatter()
+            pacificFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            pacificFormatter.timeZone = TimeZone(identifier: "America/Los_Angeles")
+            
+            debugLog("📷 PHOTO TIMEZONE DEBUG:")
+            debugLog("📷   Run date (UTC): \(utcFormatter.string(from: date))")
+            debugLog("📷   Run date (Pacific): \(pacificFormatter.string(from: date))")
+            debugLog("📷   System timezone: \(TimeZone.current.identifier)")
+        }
         
         var allAssets: [PHAsset] = []
         var seenIdentifiers = Set<String>()  // Track duplicates
@@ -64,9 +74,9 @@ class PhotoService: ObservableObject {
         let runStartTime = date.addingTimeInterval(-60 * 60)  // 1 hour before
         let runEndTime = date.addingTimeInterval(duration + 60 * 60)  // 1 hour after
         
-        print("📷 Searching for photos between:")
-        print("📷   Start: \(dateFormatter.string(from: runStartTime))")
-        print("📷   End: \(dateFormatter.string(from: runEndTime))")
+        debugLog("📷 Searching for photos between:")
+        debugLog("📷   Start: \(dateFormatter.string(from: runStartTime))")
+        debugLog("📷   End: \(dateFormatter.string(from: runEndTime))")
         
         let runTimeFetchOptions = PHFetchOptions()
         runTimeFetchOptions.predicate = NSPredicate(
@@ -78,26 +88,26 @@ class PhotoService: ObservableObject {
         runTimeFetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         
         let runTimeResult = PHAsset.fetchAssets(with: runTimeFetchOptions)
-        runTimeResult.enumerateObjects { asset, _, _ in
+        runTimeResult.enumerateObjects { [self] asset, _, _ in
             if !seenIdentifiers.contains(asset.localIdentifier) {
                 allAssets.append(asset)
                 seenIdentifiers.insert(asset.localIdentifier)
                 if let creationDate = asset.creationDate {
-                    print("📷   Found run-time photo: \(dateFormatter.string(from: creationDate))")
+                    debugLog("📷   Found run-time photo: \(dateFormatter.string(from: creationDate))")
                 }
             }
         }
         
-        print("📷 Found \(allAssets.count) photos during run time")
+        debugLog("📷 Found \(allAssets.count) photos during run time")
         
         // If no run-time photos, expand search to wider time range (1 day before/after)
         if allAssets.isEmpty {
             let expandedStartTime = date.addingTimeInterval(-24 * 60 * 60)  // 1 day before
             let expandedEndTime = date.addingTimeInterval(duration + 24 * 60 * 60)  // 1 day after
             
-            print("📷 No run-time photos, expanding to 1 day before/after:")
-            print("📷   Expanded start: \(dateFormatter.string(from: expandedStartTime))")
-            print("📷   Expanded end: \(dateFormatter.string(from: expandedEndTime))")
+            debugLog("📷 No run-time photos, expanding to 1 day before/after:")
+            debugLog("📷   Expanded start: \(dateFormatter.string(from: expandedStartTime))")
+            debugLog("📷   Expanded end: \(dateFormatter.string(from: expandedEndTime))")
             
             let expandedFetchOptions = PHFetchOptions()
             expandedFetchOptions.predicate = NSPredicate(
@@ -110,22 +120,22 @@ class PhotoService: ObservableObject {
             expandedFetchOptions.fetchLimit = 30  // Increased limit for wider search
             
             let expandedResult = PHAsset.fetchAssets(with: expandedFetchOptions)
-            expandedResult.enumerateObjects { asset, _, _ in
+            expandedResult.enumerateObjects { [self] asset, _, _ in
                 if !seenIdentifiers.contains(asset.localIdentifier) {
                     allAssets.append(asset)
                     seenIdentifiers.insert(asset.localIdentifier)
                     if let creationDate = asset.creationDate {
-                        print("📷   Found expanded timeframe photo: \(dateFormatter.string(from: creationDate))")
+                        debugLog("📷   Found expanded timeframe photo: \(dateFormatter.string(from: creationDate))")
                     }
                 }
             }
             
-            print("📷 Found \(allAssets.count) photos in expanded timeframe")
+            debugLog("📷 Found \(allAssets.count) photos in expanded timeframe")
         }
         
         // If still no photos, get recent photos from camera roll
         if allAssets.isEmpty {
-            print("📷 No same-day photos, getting recent photos from camera roll")
+            debugLog("📷 No same-day photos, getting recent photos from camera roll")
             
             let recentFetchOptions = PHFetchOptions()
             recentFetchOptions.predicate = NSPredicate(format: "mediaType = %d", PHAssetMediaType.image.rawValue)
@@ -133,21 +143,21 @@ class PhotoService: ObservableObject {
             recentFetchOptions.fetchLimit = 50  // Increased to 50 for better selection
             
             let recentResult = PHAsset.fetchAssets(with: recentFetchOptions)
-            recentResult.enumerateObjects { asset, _, _ in
+            recentResult.enumerateObjects { [self] asset, _, _ in
                 if !seenIdentifiers.contains(asset.localIdentifier) {
                     allAssets.append(asset)
                     seenIdentifiers.insert(asset.localIdentifier)
                     if let creationDate = asset.creationDate {
-                        print("📷   Found recent photo: \(dateFormatter.string(from: creationDate))")
+                        debugLog("📷   Found recent photo: \(dateFormatter.string(from: creationDate))")
                     }
                 }
             }
             
-            print("📷 Found \(allAssets.count) recent photos from camera roll")
+            debugLog("📷 Found \(allAssets.count) recent photos from camera roll")
         }
         
-        print("📷 Total unique photos: \(allAssets.count)")
-        print("📷 =========================================")
+        debugLog("📷 Total unique photos: \(allAssets.count)")
+        debugLog("📷 =========================================")
         
         await MainActor.run {
             self.availablePhotos = allAssets
@@ -238,11 +248,11 @@ class PhotoService: ObservableObject {
     func selectRandomNonScreenshotPhoto(from assets: [PHAsset]) -> PHAsset? {
         let nonScreenshots = assets.filter { !isLikelyScreenshot($0) }
         
-        print("📷 Filtered out \(assets.count - nonScreenshots.count) likely screenshots")
-        print("📷 \(nonScreenshots.count) potential background photos available")
+        debugLog("📷 Filtered out \(assets.count - nonScreenshots.count) likely screenshots")
+        debugLog("📷 \(nonScreenshots.count) potential background photos available")
         
         guard !nonScreenshots.isEmpty else {
-            print("📷 No non-screenshot photos available")
+            debugLog("📷 No non-screenshot photos available")
             return nil
         }
         
@@ -257,7 +267,7 @@ class PhotoService: ObservableObject {
     ) async -> RunPhotoBackground? {
         // Compress image for storage
         guard let imageData = image.jpegData(compressionQuality: 0.8) else {
-            print("❌ Failed to convert library image to data")
+            debugLog("❌ Failed to convert library image to data")
             return nil
         }
         
@@ -289,9 +299,9 @@ class PhotoService: ObservableObject {
         do {
             let data = try JSONEncoder().encode(background)
             UserDefaults.standard.set(data, forKey: key)
-            print("💾 Saved photo background for run \(runId)")
+            debugLog("💾 Saved photo background for run \(runId)")
         } catch {
-            print("❌ Failed to save photo background: \(error)")
+            debugLog("❌ Failed to save photo background: \(error)")
         }
     }
     
@@ -306,7 +316,7 @@ class PhotoService: ObservableObject {
             let background = try JSONDecoder().decode(RunPhotoBackground.self, from: data)
             return background
         } catch {
-            print("❌ Failed to load photo background: \(error)")
+            debugLog("❌ Failed to load photo background: \(error)")
             return nil
         }
     }
@@ -314,7 +324,7 @@ class PhotoService: ObservableObject {
     func removePhotoBackground(for runId: String) {
         let key = "photo_background_\(runId)"
         UserDefaults.standard.removeObject(forKey: key)
-        print("🗑️ Removed photo background for run \(runId)")
+        debugLog("🗑️ Removed photo background for run \(runId)")
     }
     
     func getAllStoredPhotoBackgrounds() -> [String: RunPhotoBackground] {
@@ -341,6 +351,6 @@ class PhotoService: ObservableObject {
             defaults.removeObject(forKey: key)
         }
         
-        print("🗑️ Cleared all photo backgrounds")
+        debugLog("🗑️ Cleared all photo backgrounds")
     }
 }

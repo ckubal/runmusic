@@ -86,7 +86,6 @@
 		85D50FF12E3872AD0032D16D /* StravaService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85D50FDF2E3872AD0032D16D /* StravaService.swift */; };
 		AD30C6F187D445318E8F1F4C /* CanvasAsset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57F2CDA0BC8C4942BAFBEDDA /* CanvasAsset.swift */; };
 		E19F98FFBD4C4A4BA8D0C867 /* EnhancedAssetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73F3044F0143F18C901E1B /* EnhancedAssetView.swift */; };
-		3FB1283CFA2549E3838188C9 /* RunCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90674FCE8AC549D187FB41DF /* RunCanvasView.swift */; };
 		30D8554218784454AE665994 /* RunCardStackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A4A16A8B2A54996BC84E366 /* RunCardStackView.swift */; };
 		A8CF4E870368407AB51EA07E /* RunCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59AE15DA186740FA878F5B3D /* RunCardView.swift */; };
 	/* End PBXBuildFile section */
@@ -169,7 +168,6 @@
 		85D50FE52E3872AD0032D16D /* ShareableCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareableCardView.swift; sourceTree = "<group>"; };
 		57F2CDA0BC8C4942BAFBEDDA /* CanvasAsset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CanvasAsset.swift"; sourceTree = "<group>"; };
 		3C73F3044F0143F18C901E1B /* EnhancedAssetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EnhancedAssetView.swift"; sourceTree = "<group>"; };
-		90674FCE8AC549D187FB41DF /* RunCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RunCanvasView.swift"; sourceTree = "<group>"; };
 		5A4A16A8B2A54996BC84E366 /* RunCardStackView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RunCardStackView.swift"; sourceTree = "<group>"; };
 		59AE15DA186740FA878F5B3D /* RunCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RunCardView.swift"; sourceTree = "<group>"; };
 	/* End PBXFileReference section */
@@ -336,7 +334,6 @@
 			isa = PBXGroup;
 			children = (
 				3C73F3044F0143F18C901E1B /* EnhancedAssetView.swift */,
-				90674FCE8AC549D187FB41DF /* RunCanvasView.swift */,
 			);
 			path = Canvas;
 			sourceTree = "<group>";
@@ -494,7 +491,6 @@
 				8588DB9E2E4DC09400DA2444 /* PushNotificationService.swift in Sources */,
 				2A0001 /* RunMusicApp.swift in Sources */,				AD30C6F187D445318E8F1F4C /* CanvasAsset.swift in Sources */,
 				E19F98FFBD4C4A4BA8D0C867 /* EnhancedAssetView.swift in Sources */,
-				3FB1283CFA2549E3838188C9 /* RunCanvasView.swift in Sources */,
 				30D8554218784454AE665994 /* RunCardStackView.swift in Sources */,
 				A8CF4E870368407AB51EA07E /* RunCardView.swift in Sources */,
 

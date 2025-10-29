@@ -18,21 +18,25 @@ struct EnhancedAssetView: View {
     @State private var currentScale: CGFloat = 1.0
     @State private var currentRotation: Double = 0.0
     
+    // Debug state
+    @State private var debugUpdateCount = 0
+    
     var body: some View {
         assetContent
             .overlay(
                 selectionOverlay
                     .opacity(isSelected ? 1 : 0)
             )
-            .scaleEffect(accumulatedScale * currentScale)
-            .rotationEffect(.degrees(accumulatedRotation + currentRotation))
+            .scaleEffect(accumulatedScale * currentScale, anchor: .center)
+            .rotationEffect(.degrees(accumulatedRotation + currentRotation), anchor: .center)
             .position(
                 x: accumulatedPosition.x + currentDragOffset.width,
                 y: accumulatedPosition.y + currentDragOffset.height
             )
-            .gesture(isSelected ? dragGesture : nil)
-            .gesture(isSelected ? simultaneousRotationAndScale : nil)
+            .highPriorityGesture(isSelected ? dragGesture : nil)
+            .simultaneousGesture(isSelected ? simultaneousRotationAndScale : nil)
             .onTapGesture {
+                print("🎯 Asset tapped: \(asset.type)")
                 withAnimation(.easeOut(duration: 0.2)) {
                     onSelect()
                 }
@@ -47,9 +51,23 @@ struct EnhancedAssetView: View {
             .animation(.interactiveSpring(response: 0.2, dampingFraction: 0.9), value: currentDragOffset)
             .zIndex(isSelected ? 1000 : asset.zIndex)
             .onAppear {
+                print("🎯 APPEAR: \(asset.type) - position: \(asset.position), scale: \(asset.scale), zIndex: \(asset.zIndex)")
+                if asset.type == .albumArt {
+                    print("🎨 ALBUM ART ASSET: onAppear triggered for album art!")
+                }
                 accumulatedPosition = asset.position
                 accumulatedScale = asset.scale
                 accumulatedRotation = asset.rotation
+            }
+            .onChange(of: asset.position) { oldPosition, newPosition in
+                print("🎯 POSITION CHANGED: \(asset.type)")
+                print("   📍 Old: \(oldPosition)")
+                print("   📍 New: \(newPosition)")
+                print("   📍 Accumulated before: \(accumulatedPosition)")
+                
+                // Update accumulated position when asset position changes
+                accumulatedPosition = newPosition
+                print("   📍 Accumulated after: \(accumulatedPosition)")
             }
     }
     
@@ -84,6 +102,9 @@ struct EnhancedAssetView: View {
             
         case .albumArt:
             albumArtAssetView
+                .onAppear {
+                    print("🎨 ASSET SWITCH: About to render albumArt asset")
+                }
             
         case .location:
             locationAssetView
@@ -142,10 +163,17 @@ struct EnhancedAssetView: View {
                     .foregroundColor(asset.color)
                 
                 Text(title.lowercased())
-                    .font(.system(size: asset.fontSize * 0.6, weight: .bold, design: .rounded))
-                    .foregroundColor(asset.color.opacity(0.8))
+                    .font(.system(size: asset.fontSize * 0.8, weight: .medium, design: .rounded))
+                    .foregroundColor(asset.color.opacity(0.9))
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
+            } else {
+                // Debug fallback for title/distance
+                Text("⚠️ Title Error")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.red)
+                    .padding(4)
+                    .background(Color.red.opacity(0.2))
             }
         }
         .padding(16)
@@ -161,10 +189,10 @@ struct EnhancedAssetView: View {
             if case .route(let coordinates) = asset.content {
                 RoutePathView(
                     coordinates: coordinates,
-                    songPositions: [],
+                    songPositions: nil,
                     lineWidth: 3.0,
                     showSongIndicators: false,
-                    colorScheme: RunColorScheme.presets[0] // Default color scheme
+                    colorScheme: RunColorScheme.presets.first // Default color scheme
                 )
                 .frame(width: 150, height: 150)
                 .background(
@@ -173,7 +201,12 @@ struct EnhancedAssetView: View {
                         .contentShape(Rectangle())
                 )
             } else {
-                Color.clear.frame(width: 0, height: 0)
+                // Debug fallback
+                Text("⚠️ Invalid Content")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.red)
+                    .padding(4)
+                    .background(Color.red.opacity(0.2))
             }
         }
     }
@@ -215,7 +248,12 @@ struct EnhancedAssetView: View {
                     }
                 }
             } else {
-                Color.clear.frame(width: 0, height: 0)
+                // Debug fallback
+                Text("⚠️ Invalid Content")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.red)
+                    .padding(4)
+                    .background(Color.red.opacity(0.2))
             }
         }
     }
@@ -258,7 +296,12 @@ struct EnhancedAssetView: View {
                         .contentShape(Capsule())
                 )
             } else {
-                Color.clear.frame(width: 0, height: 0)
+                // Debug fallback
+                Text("⚠️ Invalid Content")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.red)
+                    .padding(4)
+                    .background(Color.red.opacity(0.2))
             }
         }
     }
@@ -266,50 +309,48 @@ struct EnhancedAssetView: View {
     private var powerSongAssetView: some View {
         Group {
             if case .powerSong(let track, let pace) = asset.content {
-                HStack(spacing: 12) {
-                    // Large fire emoji spanning the height of the text
+                HStack(spacing: 8) {
+                    // Fire emoji scaled with font size
                     Text("🔥")
-                        .font(.system(size: 36))
+                        .font(.system(size: asset.fontSize * 2.5))
                     
                     // Text content
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 1) {
                         // Bold song title
                         Text(track.name.lowercased())
-                            .font(.system(size: 16, weight: .bold))
+                            .font(.system(size: asset.fontSize * 1.2, weight: .bold))
                             .foregroundColor(.white)
                             .lineLimit(1)
                         
                         // Artist name
                         Text(track.artist.lowercased())
-                            .font(.system(size: 14, weight: .regular))
+                            .font(.system(size: asset.fontSize, weight: .regular))
                             .foregroundColor(.white.opacity(0.9))
                             .lineLimit(1)
                         
-                        // Pace with larger time and smaller "per mile"
+                        // Pace with scaled fonts
                         if let pace = pace {
-                            HStack(spacing: 2) {
+                            HStack(spacing: 1) {
                                 Text(pace)
-                                    .font(.system(size: 16, weight: .medium))
+                                    .font(.system(size: asset.fontSize * 1.1, weight: .medium))
                                     .foregroundColor(.white)
                                 Text("per mile")
-                                    .font(.system(size: 12, weight: .regular))
+                                    .font(.system(size: asset.fontSize * 0.8, weight: .regular))
                                     .foregroundColor(.white.opacity(0.8))
                             }
                         }
                     }
-                    
-                    Spacer()
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
                         .fill(
-                            // Weather-based gradient - default to orange/red fire colors
+                            // Weather-based gradient - 40% opacity as requested
                             LinearGradient(
                                 colors: [
-                                    Color.orange.opacity(0.8),
-                                    Color.red.opacity(0.6)
+                                    Color.orange.opacity(0.4),
+                                    Color.red.opacity(0.4)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -322,7 +363,12 @@ struct EnhancedAssetView: View {
                 )
                 .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
             } else {
-                Color.clear.frame(width: 0, height: 0)
+                // Debug fallback
+                Text("⚠️ Invalid Content")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.red)
+                    .padding(4)
+                    .background(Color.red.opacity(0.2))
             }
         }
     }
@@ -330,44 +376,86 @@ struct EnhancedAssetView: View {
     private var albumArtAssetView: some View {
         Group {
             if case .albumArt(let imageURL, let imageData, let albumName, let artistName) = asset.content {
-            Group {
-                if let imageData = imageData, let uiImage = UIImage(data: imageData) {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else {
-                    // Placeholder for album art
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.purple.opacity(0.6), Color.blue.opacity(0.4)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .overlay(
-                            VStack(spacing: 2) {
-                                Image(systemName: "music.note")
-                                    .font(.system(size: 20))
-                                    .foregroundColor(.white.opacity(0.8))
-                                
-                                Text(albumName.prefix(12))
-                                    .font(.system(size: 8, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.7))
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.center)
+                Group {
+                    if let imageData = imageData, let uiImage = UIImage(data: imageData) {
+                        // Use cached image data if available
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } else if let imageURL = imageURL, !imageURL.isEmpty, let url = URL(string: imageURL) {
+                        // Load image from URL using AsyncImage
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            case .failure(let error):
+                                // Show error placeholder
+                                albumArtPlaceholder(albumName: albumName, isError: true)
+                                    .onAppear {
+                                        print("🎨 Album art failed to load for '\(albumName)': \(error.localizedDescription)")
+                                    }
+                            case .empty:
+                                // Loading placeholder
+                                albumArtPlaceholder(albumName: albumName, isError: false)
+                            @unknown default:
+                                albumArtPlaceholder(albumName: albumName, isError: false)
                             }
-                        )
+                        }
+                        .onAppear {
+                            print("🎨 Loading album art for '\(albumName)': \(imageURL)")
+                        }
+                    } else {
+                        // No image URL - show placeholder
+                        albumArtPlaceholder(albumName: albumName, isError: false)
+                    }
                 }
-            }
-            .frame(width: 60, height: 60)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
-            .contentShape(Rectangle())
+                .frame(width: 80, height: 80) // 80x80 as requested
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+                .contentShape(Rectangle())
+                .onAppear {
+                    print("🎨 ALBUM ART VIEW: Rendering album art for '\(albumName)'")
+                    print("🎨 ALBUM ART VIEW: Asset position: \(asset.position), scale: \(asset.scale), zIndex: \(asset.zIndex)")
+                    print("🎨 ALBUM ART VIEW: imageURL: \(imageURL ?? "nil"), hasImageData: \(imageData != nil)")
+                }
             } else {
-                Color.clear.frame(width: 0, height: 0)
+                // Debug fallback
+                Text("⚠️ Invalid Content")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.red)
+                    .padding(4)
+                    .background(Color.red.opacity(0.2))
             }
         }
+    }
+    
+    @ViewBuilder
+    private func albumArtPlaceholder(albumName: String, isError: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(
+                LinearGradient(
+                    colors: isError ? 
+                        [Color.red.opacity(0.6), Color.orange.opacity(0.4)] :
+                        [Color.purple.opacity(0.6), Color.blue.opacity(0.4)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(
+                VStack(spacing: 2) {
+                    Image(systemName: isError ? "exclamationmark.triangle" : "music.note")
+                        .font(.system(size: 24))
+                        .foregroundColor(.white.opacity(0.8))
+                    
+                    Text(albumName.prefix(12))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.white.opacity(0.7))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                }
+            )
     }
     
     private var locationAssetView: some View {
@@ -392,27 +480,58 @@ struct EnhancedAssetView: View {
     private var statsClusterAssetView: some View {
         Group {
             if case .stats(let stats) = asset.content {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 12) {
-                    statBadge(icon: "speedometer", text: stats.pace, color: .green)
-                    statBadge(icon: "clock", text: stats.time, color: .blue)
-                }
-                
-                HStack(spacing: 12) {
-                    statBadge(icon: "calendar", text: stats.date, color: .purple)
+                HStack(spacing: 8) {
+                    // Date
+                    Text(stats.date)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.white.opacity(0.9))
+                    
+                    Text("•")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.white.opacity(0.5))
+                    
+                    // Time
+                    Text(stats.time)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white.opacity(0.9))
+                    
+                    Text("•")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.white.opacity(0.5))
+                    
+                    // Pace
+                    Text(stats.pace)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.green.opacity(0.9))
+                    
+                    // Weather (if available)
                     if let weather = stats.weather {
-                        statBadge(icon: "thermometer", text: weather, color: .orange)
+                        Text("•")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white.opacity(0.5))
+                        
+                        Text(weather)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.orange.opacity(0.9))
                     }
                 }
-            }
-            .padding(8)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.black.opacity(0.1))
-                    .contentShape(Rectangle())
-            )
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.black.opacity(0.4))
+                        .contentShape(Rectangle())
+                )
             } else {
-                Color.clear.frame(width: 0, height: 0)
+                // Fallback for invalid content - show debug info
+                Text("Stats Error")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.red)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.red.opacity(0.2))
+                    )
             }
         }
     }
@@ -456,20 +575,36 @@ struct EnhancedAssetView: View {
     // MARK: - Gesture System (copied from RunTunes)
     
     private var dragGesture: some Gesture {
-        DragGesture()
+        DragGesture(minimumDistance: 1)
             .onChanged { value in
+                print("🎯 DRAGGING: \(asset.type) - offset: \(value.translation)")
                 currentDragOffset = value.translation
             }
             .onEnded { value in
+                debugUpdateCount += 1
                 let newX = max(20, min(canvasSize.width - 20, accumulatedPosition.x + value.translation.width))
                 let newY = max(40, min(canvasSize.height - 40, accumulatedPosition.y + value.translation.height))
+                
+                print("🎯 DRAG ENDED: \(asset.type)")
+                print("   📍 Old position: \(accumulatedPosition)")
+                print("   📍 Translation: \(value.translation)")
+                print("   📍 New position: CGPoint(x: \(newX), y: \(newY))")
+                print("   🔄 Update count: \(debugUpdateCount)")
+                
+                // Update accumulated position immediately to prevent snap-back
                 accumulatedPosition = CGPoint(x: newX, y: newY)
                 
+                // Create updated asset and notify parent
                 var updatedAsset = asset
                 updatedAsset.position = accumulatedPosition
+                
+                print("   💾 Calling onUpdate with position: \(updatedAsset.position)")
                 onUpdate(updatedAsset)
                 
-                currentDragOffset = .zero
+                // Reset drag offset only after position is updated
+                withAnimation(.easeOut(duration: 0.1)) {
+                    currentDragOffset = .zero
+                }
             }
     }
     

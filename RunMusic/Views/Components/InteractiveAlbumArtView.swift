@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct InteractiveAlbumArtView: View {
     @Binding var albumArt: AlbumArtDisplay
@@ -7,6 +8,7 @@ struct InteractiveAlbumArtView: View {
     @State private var lastOffset = CGSize.zero
     @State private var lastScale: CGFloat = 1.0
     @State private var lastRotation: Angle = .zero
+    @State private var isBeingInteracted = false
     
     var body: some View {
         AsyncImage(url: URL(string: albumArt.imageURL ?? "")) { phase in
@@ -85,20 +87,47 @@ struct InteractiveAlbumArtView: View {
             SimultaneousGesture(
                 DragGesture()
                     .onChanged { value in
-                        // Update position based on drag
-                        albumArt.offsetX = lastOffset.width + value.translation.width
-                        albumArt.offsetY = lastOffset.height + value.translation.height
+                        // Haptic feedback on first movement
+                        if !isBeingInteracted {
+                            let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                            impactFeedback.impactOccurred()
+                            isBeingInteracted = true
+                        }
+                        
+                        // Update position
+                        let newX = albumArt.offsetX - lastOffset.width + value.translation.width
+                        let newY = albumArt.offsetY - lastOffset.height + value.translation.height
+                        albumArt.offsetX = newX
+                        albumArt.offsetY = newY
                         onTransformChanged()
                     }
-                    .onEnded { _ in
-                        lastOffset = CGSize(width: albumArt.offsetX, height: albumArt.offsetY)
+                    .onEnded { value in
+                        lastOffset = CGSize(
+                            width: lastOffset.width - value.translation.width,
+                            height: lastOffset.height - value.translation.height
+                        )
+                        isBeingInteracted = false
+                        
+                        // Haptic feedback on release
+                        let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                        impactFeedback.impactOccurred()
                     },
                 MagnificationGesture()
                     .onChanged { value in
-                        albumArt.scale = lastScale * value
+                        // Haptic feedback at scale thresholds
+                        let newScale = lastScale * value
+                        let oldScale = albumArt.scale
+                        
+                        // Feedback when crossing 0.25x increments
+                        if Int(oldScale * 4) != Int(newScale * 4) {
+                            let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                            impactFeedback.impactOccurred()
+                        }
+                        
+                        albumArt.scale = newScale
                         onTransformChanged()
                     }
-                    .onEnded { _ in
+                    .onEnded { value in
                         lastScale = albumArt.scale
                     }
             )
@@ -122,6 +151,10 @@ struct InteractiveAlbumArtView: View {
                 lastRotation = .zero
             }
             onTransformChanged()
+            
+            // Haptic feedback for reset
+            let notificationFeedback = UINotificationFeedbackGenerator()
+            notificationFeedback.notificationOccurred(.success)
         }
         .animation(.interactiveSpring(), value: albumArt.offsetX)
         .animation(.interactiveSpring(), value: albumArt.offsetY)

@@ -95,6 +95,35 @@ extension Color: Codable {
     }
 }
 
+// MARK: - Canvas Alignment (Edge-based positioning)
+
+enum CanvasAlignment: String, Codable, CaseIterable {
+    case center = "center"
+    case topLeading = "topLeading"
+    case top = "top"
+    case topTrailing = "topTrailing"
+    case leading = "leading"
+    case trailing = "trailing"
+    case bottomLeading = "bottomLeading"
+    case bottom = "bottom"
+    case bottomTrailing = "bottomTrailing"
+    
+    // Convert to SwiftUI Alignment
+    var swiftUIAlignment: Alignment {
+        switch self {
+        case .center: return .center
+        case .topLeading: return .topLeading
+        case .top: return .top
+        case .topTrailing: return .topTrailing
+        case .leading: return .leading
+        case .trailing: return .trailing
+        case .bottomLeading: return .bottomLeading
+        case .bottom: return .bottom
+        case .bottomTrailing: return .bottomTrailing
+        }
+    }
+}
+
 // MARK: - Canvas Asset for Run Details Canvas View
 
 struct CanvasAsset: Identifiable, Equatable, Codable {
@@ -102,6 +131,8 @@ struct CanvasAsset: Identifiable, Equatable, Codable {
     var type: AssetType
     var content: AssetContent
     var position: CGPoint
+    var anchorPoint: CGPoint? // Percentage-based positioning (0.0-1.0)
+    var alignment: CanvasAlignment? // SwiftUI edge-based alignment
     var rotation: Double = 0
     var scale: Double = 1.0
     var fontSize: CGFloat = 16
@@ -120,7 +151,7 @@ struct CanvasAsset: Identifiable, Equatable, Codable {
     
     // Custom coding for UUID and complex types
     enum CodingKeys: String, CodingKey {
-        case type, content, position, rotation, scale, fontSize, fontWeight, fontFamily, color, showBlackOutline
+        case type, content, position, anchorPoint, alignment, rotation, scale, fontSize, fontWeight, fontFamily, color, showBlackOutline
         case isVisible, isSelected, zIndex, editableType, canDelete, canDuplicate
     }
     
@@ -253,7 +284,7 @@ enum AssetContent: Codable, Equatable {
             return String(format: "%d:%02d/%s", minutes, seconds, unit)
         case .date(let date):
             let formatter = DateFormatter()
-            formatter.dateFormat = "MMM d"
+            formatter.dateFormat = "E MMM d" // E = day of week abbreviation (e.g., "Sat Oct 19")
             return formatter.string(from: date).lowercased()
         case .time(let duration):
             let hours = Int(duration / 3600)
@@ -331,13 +362,13 @@ struct StatsCluster: Codable, Equatable {
         self.pace = UserPreferences.shared.formatPace(run.averagePace) + "/\(UserPreferences.shared.distanceUnit.abbreviation)"
         
         let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d"
+        formatter.dateFormat = "E MMM d" // E = day of week abbreviation (e.g., "Sat Oct 19")
         self.date = formatter.string(from: run.date).lowercased()
         
         self.time = run.formattedDuration
         
         if let weather = run.weatherData {
-            self.weather = "\(Int(weather.temperature))°F"
+            self.weather = "\(Int(weather.temperature))°F \(weather.condition.emoji)"
         } else {
             self.weather = nil
         }
@@ -386,14 +417,44 @@ extension CanvasAsset {
             tracks = [powerSong]
         }
         
+        // Default to showing up to 20 songs (all tracks from run)
+        tracks = Array(tracks.prefix(20))
+        
         return CanvasAsset(
             type: .songList,
             content: .songList(tracks: tracks, powerSongId: powerSongId),
             position: position,
             fontSize: 12,
             fontWeight: .medium,
+            color: .white,
+            showBlackOutline: true, // Enable by default
             editableType: .list,
             canDelete: tracks.isEmpty // Can delete if no songs
+        )
+    }
+    
+    static func createCompactSongList(for run: RunActivity, position: CGPoint, maxSongs: Int = 6) -> CanvasAsset {
+        var tracks = run.spotifyTracks ?? []
+        let powerSongId = run.powerSong?.id
+        
+        // CRITICAL FIX: If we have no tracks but have a power song, include the power song
+        if tracks.isEmpty, let powerSong = run.powerSong {
+            tracks = [powerSong]
+        }
+        
+        // Limit to specified max to prevent layout overflow
+        tracks = Array(tracks.prefix(maxSongs))
+        
+        return CanvasAsset(
+            type: .songList,
+            content: .songList(tracks: tracks, powerSongId: powerSongId),
+            position: position,
+            fontSize: 11, // Slightly smaller for compact layout
+            fontWeight: .medium,
+            color: .white,
+            showBlackOutline: true,
+            editableType: .list,
+            canDelete: tracks.isEmpty
         )
     }
     
@@ -449,25 +510,44 @@ extension CanvasAsset {
     }
     
     static func createPowerSong(for run: RunActivity, position: CGPoint = CGPoint(x: 320, y: 450)) -> CanvasAsset? {
-        guard let powerSong = run.powerSong else { return nil }
+        // If we have a proper power song, use it
+        if let powerSong = run.powerSong {
+            return CanvasAsset(
+                type: .powerSong,
+                content: .powerSong(powerSong, pace: run.powerSongPacePerMile),
+                position: position,
+                fontSize: 14,
+                fontWeight: .bold,
+                color: .red,
+                zIndex: 2.0,
+                editableType: .powerSong
+            )
+        }
         
-        return CanvasAsset(
-            type: .powerSong,
-            content: .powerSong(powerSong, pace: run.powerSongPacePerMile),
-            position: position,
-            fontSize: 14,
-            fontWeight: .bold,
-            color: .red,
-            zIndex: 2.0,
-            editableType: .powerSong
-        )
+        // FALLBACK: If no power song but we have Spotify tracks, use the first one as power song
+        if let firstTrack = run.spotifyTracks?.first {
+            return CanvasAsset(
+                type: .powerSong,
+                content: .powerSong(firstTrack, pace: nil),
+                position: position,
+                fontSize: 14,
+                fontWeight: .bold,
+                color: .red,
+                zIndex: 2.0,
+                editableType: .powerSong
+            )
+        }
+        
+        return nil
     }
     
-    static func createAlbumArt(imageURL: String?, imageData: Data?, albumName: String, artistName: String, position: CGPoint) -> CanvasAsset {
+    static func createAlbumArt(imageURL: String?, imageData: Data?, albumName: String, artistName: String, position: CGPoint, anchorPoint: CGPoint? = nil) -> CanvasAsset {
         return CanvasAsset(
             type: .albumArt,
             content: .albumArt(imageURL: imageURL, imageData: imageData, albumName: albumName, artistName: artistName),
             position: position,
+            anchorPoint: anchorPoint, // Set directly during creation
+            alignment: nil,   // Use percentage positioning
             scale: 0.6,
             zIndex: 1.5,
             editableType: .visual
@@ -475,75 +555,180 @@ extension CanvasAsset {
     }
     
     static func createLocation(for run: RunActivity, position: CGPoint = CGPoint(x: 200, y: 150)) -> CanvasAsset? {
-        guard let location = run.smartLocationDisplay else { return nil }
+        // Try smart location display first
+        if let location = run.smartLocationDisplay {
+            return CanvasAsset(
+                type: .location,
+                content: .location(location),
+                position: position,
+                fontSize: 12,
+                fontWeight: .medium,
+                color: .orange,
+                editableType: .text
+            )
+        }
         
+        // FALLBACK: Try city if available
+        if let city = run.city, !city.isEmpty {
+            return CanvasAsset(
+                type: .location,
+                content: .location(city),
+                position: position,
+                fontSize: 12,
+                fontWeight: .medium,
+                color: .orange,
+                editableType: .text
+            )
+        }
+        
+        // FALLBACK: Use generic location if no specific location available
         return CanvasAsset(
             type: .location,
-            content: .location(location),
+            content: .location("unknown location"),
             position: position,
-            fontSize: 14,
+            fontSize: 12,
             fontWeight: .medium,
-            color: .cyan,
+            color: .orange.opacity(0.7),
             editableType: .text
+        )
+    }
+    
+    static func createStatsCluster(for run: RunActivity, position: CGPoint = CGPoint(x: 300, y: 100)) -> CanvasAsset {
+        let stats = StatsCluster(run: run)
+        
+        return CanvasAsset(
+            type: .stats,
+            content: .stats(stats),
+            position: position,
+            fontSize: 12,
+            fontWeight: .medium,
+            color: .white,
+            editableType: .none,
+            canDelete: false // Core element
         )
     }
     
     // MARK: - Generate Default Layout for RunActivity
     
     static func generateDefaultAssets(for run: RunActivity, canvasSize: CGSize) -> [CanvasAsset] {
+        print("🎨 Creating edge-based canvas layout for run: \(run.name)")
+        print("🎨 Canvas size: \(canvasSize)")
+        
         var assets: [CanvasAsset] = []
         
-        let centerX = canvasSize.width / 2
-        let topY = canvasSize.height * 0.15
-        let middleY = canvasSize.height * 0.4
-        let bottomY = canvasSize.height * 0.75
+        // Edge-based alignment using SwiftUI alignments
         
-        // Core assets (always present)
-        assets.append(createTitleDistance(for: run, position: CGPoint(x: centerX, y: topY)))
+        // 1. TITLE & DISTANCE (center alignment)
+        var titleAsset = createTitleDistance(for: run, position: .zero)
+        titleAsset.alignment = .center
+        titleAsset.fontSize = 28 // Large, prominent title
+        titleAsset.fontWeight = .bold
+        assets.append(titleAsset)
+        print("  ✅ Added title/distance with center alignment")
         
+        // 2. STATS CLUSTER (top-trailing edge)
+        var statsAsset = createStatsCluster(for: run, position: .zero)
+        statsAsset.alignment = .topTrailing
+        assets.append(statsAsset)
+        print("  ✅ Added stats cluster with topTrailing alignment")
+        
+        // 3. LOCATION (top-trailing edge, below stats)
+        if var locationAsset = createLocation(for: run, position: .zero) {
+            locationAsset.alignment = .topTrailing
+            assets.append(locationAsset)
+            print("  ✅ Added location with topTrailing alignment")
+        }
+        
+        // 4. ROUTE MAP (center, middle portion)
         if !run.routeCoordinates.isEmpty {
-            assets.append(createRoute(for: run, position: CGPoint(x: centerX, y: middleY)))
+            var routeAsset = createRoute(for: run, position: .zero)
+            routeAsset.alignment = .center
+            routeAsset.scale = 1.2 // Larger map
+            assets.append(routeAsset)
+            print("  ✅ Added route map with center alignment")
         }
         
-        // Stats in top-right area
-        let statsStartX = canvasSize.width * 0.7
-        let statsY = topY * 0.5
-        
-        assets.append(createPace(for: run, position: CGPoint(x: statsStartX, y: statsY)))
-        assets.append(createDate(for: run, position: CGPoint(x: statsStartX, y: statsY + 25)))
-        assets.append(createTime(for: run, position: CGPoint(x: statsStartX, y: statsY + 50)))
-        
-        if let weatherAsset = createWeather(for: run, position: CGPoint(x: statsStartX, y: statsY + 75)) {
-            assets.append(weatherAsset)
-        }
-        
-        // Optional assets
-        if let location = createLocation(for: run, position: CGPoint(x: centerX, y: topY + 60)) {
-            assets.append(location)
-        }
-        
-        if let powerSong = createPowerSong(for: run, position: CGPoint(x: canvasSize.width * 0.95, y: bottomY)) {
-            assets.append(powerSong)
-        }
-        
-        // Song list in bottom-left
+        // 5. SONG LIST (leading edge)
         if let tracks = run.spotifyTracks, !tracks.isEmpty {
-            assets.append(createSongList(for: run, position: CGPoint(x: canvasSize.width * 0.05, y: bottomY - 50)))
+            var songListAsset = createSongList(for: run, position: .zero)
+            songListAsset.alignment = .leading
+            assets.append(songListAsset)
+            print("  ✅ Added song list with leading alignment")
         }
         
-        // Album art scattered around
-        if let firstTrack = run.spotifyTracks?.first,
-           let albumArt = run.portraitSettings.albumArtDisplays?.first {
-            let albumAsset = createAlbumArt(
-                imageURL: firstTrack.albumImageURL,
-                imageData: nil, // Will be loaded asynchronously
-                albumName: firstTrack.album ?? "Unknown Album",
-                artistName: firstTrack.artist,
-                position: CGPoint(x: albumArt.offsetX, y: albumArt.offsetY)
-            )
-            assets.append(albumAsset)
+        // 6. ALBUM ART (multiple albums, positioned on trailing edge)
+        var qualifyingAlbums: [(String, [SpotifyTrack])] = []
+        if let tracks = run.spotifyTracks, !tracks.isEmpty {
+            // Group tracks by album
+            let albumGroups = Dictionary(grouping: tracks) { track in
+                "\(track.album ?? "Unknown")|\(track.artist)" // Use string key instead of tuple
+            }
+            
+            // Find albums with 3+ tracks and sort by track count (most tracks first)
+            qualifyingAlbums = albumGroups.filter { $0.value.count >= 3 }.sorted { $0.value.count > $1.value.count }
+            
+            if !qualifyingAlbums.isEmpty {
+                print("  🎨 Found \(qualifyingAlbums.count) albums with 3+ tracks:")
+                for (albumKey, albumTracks) in qualifyingAlbums {
+                    let parts = albumKey.split(separator: "|")
+                    let albumName = String(parts.first ?? "Unknown")
+                    print("    - \(albumName): \(albumTracks.count) tracks")
+                }
+                
+                // Position up to 3 album arts vertically on the right side
+                let maxAlbums = min(3, qualifyingAlbums.count)
+                for (index, (albumKey, albumTracks)) in qualifyingAlbums.prefix(maxAlbums).enumerated() {
+                    let parts = albumKey.split(separator: "|")
+                    let albumName = String(parts.first ?? "Unknown")
+                    let artistName = String(parts.last ?? "Unknown")
+                    
+                    // Use album art from any track in this album
+                    if let albumImageURL = albumTracks.first?.albumImageURL {
+                        // Position albums vertically with spacing
+                        let baseY = 0.65 // Start at 65% down
+                        let spacing = 0.12 // 12% spacing between albums
+                        let yPosition = baseY + (Double(index) * spacing)
+                        
+                        var albumArtAsset = createAlbumArt(
+                            imageURL: albumImageURL,
+                            imageData: nil,
+                            albumName: albumName,
+                            artistName: artistName,
+                            position: .zero, // Not used when anchorPoint is set
+                            anchorPoint: CGPoint(x: 0.88, y: yPosition) // 88% right, spaced vertically
+                        )
+                        albumArtAsset.scale = 0.7 // Smaller for multiple albums
+                        albumArtAsset.zIndex = 5.0 + Double(index) * 0.1 // Ensure layering
+                        assets.append(albumArtAsset)
+                        print("  ✅ Added album art #\(index + 1) - \(albumName) (\(albumTracks.count) tracks)")
+                        print("    🎨 Position: (0.88, \(yPosition)), scale: \(albumArtAsset.scale)")
+                    }
+                }
+            } else {
+                print("  ℹ️ No albums with 3+ tracks found for album art")
+            }
         }
         
+        // 7. POWER SONG (positioned below all album arts with no overlap)
+        if var powerSongAsset = createPowerSong(for: run, position: .zero) {
+            powerSongAsset.alignment = nil // Use percentage positioning
+            
+            // Calculate position below the last album art
+            let albumCount = qualifyingAlbums.count
+            let maxDisplayedAlbums = min(3, albumCount)
+            let baseY = 0.65 // Album art starts at 65%
+            let spacing = 0.12 // 12% spacing between albums
+            let lastAlbumY = baseY + (Double(maxDisplayedAlbums - 1) * spacing)
+            let powerSongY = min(0.94, lastAlbumY + 0.15) // Position below last album art, max 94%
+            
+            powerSongAsset.anchorPoint = CGPoint(x: 0.75, y: powerSongY) // Further left, below all album arts
+            powerSongAsset.fontSize = 10 // Smaller font
+            powerSongAsset.scale = 0.8 // Smaller overall
+            assets.append(powerSongAsset)
+            print("  ✅ Added power song at (0.75, \(powerSongY)) - below \(maxDisplayedAlbums) album art(s)")
+        }
+        
+        print("🎨 Generated \(assets.count) canvas assets with edge-based alignment")
         return assets
     }
 }

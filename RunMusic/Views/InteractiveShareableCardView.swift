@@ -244,9 +244,9 @@ struct InteractiveShareableCardView: View {
             .zIndex(trackListZIndex)
             .opacity(isTrackListBeingInteracted ? 0.8 : 1.0) // Visual feedback when dragging
             .animation(.easeInOut(duration: 0.1), value: isTrackListBeingInteracted)
-            .highPriorityGesture(
+            .gesture(
                 SimultaneousGesture(
-                    DragGesture(minimumDistance: 0)
+                    DragGesture(minimumDistance: 5) // Increase minimum distance to avoid conflicts
                         .onChanged { value in
                             // Haptic feedback on first movement
                             if !isTrackListBeingInteracted {
@@ -351,9 +351,9 @@ struct InteractiveShareableCardView: View {
             .zIndex(routeZIndex)
             .opacity(isRouteBeingInteracted ? 0.8 : 1.0) // Visual feedback when dragging
             .animation(.easeInOut(duration: 0.1), value: isRouteBeingInteracted)
-            .highPriorityGesture(
+            .gesture(
                 SimultaneousGesture(
-                    DragGesture(minimumDistance: 0)
+                    DragGesture(minimumDistance: 5) // Increase minimum distance to avoid conflicts
                         .onChanged { value in
                             // Haptic feedback on first movement
                             if !isRouteBeingInteracted {

@@ -1461,6 +1461,10 @@ struct RunDetailView: View {
     }
     
     private func initializeAlbumArtAfterEnrichment() {
+        print("🎨 ALBUM ART DEBUG: initializeAlbumArtAfterEnrichment() called")
+        print("🎨 ALBUM ART DEBUG: Current albumArtDisplays: \(run.portraitSettings.albumArtDisplays?.count ?? 0) displays")
+        print("🎨 ALBUM ART DEBUG: Available album art count: \(run.availableAlbumArt.count)")
+        
         // First, validate existing album art displays against current 3+ song requirement
         if let existingDisplays = run.portraitSettings.albumArtDisplays {
             let currentlyAvailable = Set(run.availableAlbumArt.map { $0.albumName })

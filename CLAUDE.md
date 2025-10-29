@@ -1,5 +1,5 @@
 # RunMusic App - Current State Documentation
-Last Updated: 2025-10-17
+Last Updated: 2025-10-29
 
 ## 🎯 Project Overview
 RunMusic is an iOS app that combines Strava running data with Spotify listening history to create beautiful, shareable cards. Built with SwiftUI for iOS 17+.
@@ -311,6 +311,123 @@ To ensure this problem ACTUALLY never recurs:
 4. ✅ **Smart Error Detection**: Distinguish between temporary and permanent auth errors
 5. ✅ **Comprehensive Code Review**: Fixed ALL token-clearing code paths, not just one
 6. ✅ **Accurate Documentation**: No more false "FULLY RESOLVED" claims without comprehensive testing
+
+---
+
+## 📱 CARD STACK INTERFACE IMPROVEMENTS (October 29, 2025) - ✅ FULLY IMPLEMENTED
+
+**Major Visual and UX Enhancements**: Complete redesign of the run card stack interface with improved layout, visibility, and user experience.
+
+### **🎯 Key Improvements Implemented**
+
+#### **1. Route Line Visibility - ✅ FIXED**
+**Issue**: Route lines were barely visible, getting rendered below dark overlay gradients
+**Solution**: 
+- ✅ **Repositioned route above dark overlay** for proper z-index layering
+- ✅ **Optimized line thickness** (reduced from 12.0 to 8.0 for cleaner appearance) 
+- ✅ **High opacity** (0.95) for strong visibility against all backgrounds
+- ✅ **Larger frame** (300x220) for better prominence
+
+#### **2. Power Song Layout - ✅ REDESIGNED**
+**Issue**: Power song in top-right was cutting off title/location text
+**Solution**:
+- ✅ **Moved below title/location** for full horizontal space utilization
+- ✅ **Right-aligned compact background** that only extends as wide as text content
+- ✅ **Includes pace information** when available (e.g., "8:33/mi")
+- ✅ **Professional pill-style background** with proper shadows
+
+#### **3. Title and Location - ✅ OPTIMIZED**
+**Issue**: Title was constrained by power song, location appeared twice
+**Solution**:
+- ✅ **Full width title display** with proper 2-line support and line breaks
+- ✅ **Removed duplicate location** from bottom data strip
+- ✅ **Enhanced typography** with better shadows and readability
+- ✅ **Proper text wrapping** with `fixedSize(horizontal: false, vertical: true)`
+
+#### **4. Card Dimensions - ✅ FIXED**
+**Issue**: Text cutoff at top and bottom of cards
+**Solution**:
+- ✅ **Increased card height** from 420 to 520 points (100-point increase)
+- ✅ **Enhanced padding** with separate horizontal (18) and vertical (28) spacing
+- ✅ **Eliminated all text cutoff** at top and bottom edges
+- ✅ **Better content spacing** throughout the card
+
+#### **5. Navigation Enhancement - ✅ ADDED**
+**New Feature**: Back-to-top functionality for easy navigation
+- ✅ **Arrow-up button** positioned next to settings icon
+- ✅ **One-click return** to most recent run from any scroll position
+- ✅ **Smart state management** - disabled when already at top
+- ✅ **Animated restoration** of swiped cards with data refresh
+
+### **🔧 Technical Implementation**
+
+**Files Modified**:
+- `RunMusic/Views/RunCardStackView.swift` - **Primary implementation file**
+  - New `RunStackCardView` component (lines 3559-3818)
+  - Enhanced route positioning and z-index management
+  - Redesigned power song layout with right-alignment
+  - Optimized card dimensions and padding
+  - Added `scrollToTop()` function for navigation
+
+**Key Code Improvements**:
+```swift
+// Route positioned above dark overlay for visibility
+VStack {
+    Spacer()
+    RoutePathView(
+        coordinates: run.routeCoordinates,
+        lineWidth: 8.0,  // Optimized thickness
+        colorScheme: run.weatherBasedRouteColor ?? run.colorScheme ?? RunColorScheme.presets[0]
+    )
+    .opacity(0.95)  // High visibility
+    .frame(width: 300, height: 220)
+}
+
+// Right-aligned power song with compact background
+HStack {
+    Spacer() // Push to right
+    HStack(spacing: 6) {
+        Text("🔥").font(.system(size: 14))
+        VStack(alignment: .leading, spacing: 2) {
+            Text(powerSong.name.lowercased())
+            if let pace = run.powerSongPacePerMile {
+                Text(pace + "/mi").foregroundColor(.orange)
+            }
+        }
+    }
+    .padding(.horizontal, 10).padding(.vertical, 6)
+    .background(Color.black.opacity(0.5))
+    .cornerRadius(12)
+}
+
+// Optimized card dimensions
+.frame(height: 520) // Increased from 420
+.padding(.horizontal, 18)
+.padding(.vertical, 28) // Enhanced vertical spacing
+```
+
+### **🎨 User Experience Impact**
+
+**Before**: 
+- Route lines barely visible
+- Power song cutting off title text  
+- Text truncation at card edges
+- Difficult navigation back to recent runs
+- Location information duplicated
+
+**After**:
+- ✅ **Clear, prominent route visualization** 
+- ✅ **Full-width titles** with proper line breaks
+- ✅ **Professional power song display** with pace information
+- ✅ **No text cutoff** anywhere on cards
+- ✅ **One-tap navigation** back to top
+- ✅ **Clean information hierarchy** without duplication
+
+### **📊 Performance Notes**
+- All changes maintain smooth card swiping performance
+- Photo background loading remains optimized with `.softFocus` filter
+- Route rendering efficiently handled with proper z-index layering
+- Back-to-top function includes smart batching of card restoration
 
 ---
 

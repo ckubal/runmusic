@@ -105,6 +105,15 @@ const getSpotifyCredentials = () => {
  * Continuous Spotify Sync - Runs every 45 minutes
  * Syncs Spotify listening history for all authenticated users
  */
+// Debug logging control
+const enableVerboseLogging = false;
+
+function debugLog(message: string, ...args: any[]) {
+  if (enableVerboseLogging) {
+    logger.info(message, ...args);
+  }
+}
+
 export const continuousSpotifySync = onSchedule('every 45 minutes', async (event) => {
   logger.info('Starting continuous Spotify sync (every 45 minutes)...');
   
@@ -128,7 +137,7 @@ export const continuousSpotifySync = onSchedule('every 45 minutes', async (event
       }
     }
     
-    logger.info(`Found ${usersWithSpotifyTokens.length} users with Spotify tokens for continuous sync`);
+    debugLog(`Found ${usersWithSpotifyTokens.length} users with Spotify tokens for continuous sync`);
     
     let successfulSyncs = 0;
     let failedSyncs = 0;
@@ -137,11 +146,11 @@ export const continuousSpotifySync = onSchedule('every 45 minutes', async (event
     // Process each user
     for (const userId of usersWithSpotifyTokens) {
       try {
-        logger.info(`Starting backup sync for user: ${userId}`);
+        debugLog(`Starting backup sync for user: ${userId}`);
         const trackCount = await syncUserSpotifyHistory(userId);
         totalTracks += trackCount;
         successfulSyncs++;
-        logger.info(`Synced ${trackCount} tracks for user ${userId}`);
+        debugLog(`Synced ${trackCount} tracks for user ${userId}`);
       } catch (error) {
         logger.error(`Failed to sync user ${userId}:`, error);
         failedSyncs++;
@@ -202,13 +211,13 @@ async function syncUserSpotifyHistory(userId: string): Promise<number> {
       return 0;
     }
     
-    logger.info(`Successfully decrypted tokens - hasRefreshToken: ${!!decryptedTokens.refreshToken}`);
+    debugLog(`Successfully decrypted tokens - hasRefreshToken: ${!!decryptedTokens.refreshToken}`);
     
     // Check if access token is expired and refresh if needed
     let accessToken = decryptedTokens.accessToken;
     
     if (isTokenExpired(decryptedTokens.expiresAt)) {
-      logger.info(`Decrypted access token expired for user ${userId}, refreshing...`);
+      debugLog(`Decrypted access token expired for user ${userId}, refreshing...`);
       
       if (!decryptedTokens.refreshToken) {
         logger.warn(`No refresh token available for user ${userId} - user needs to re-authenticate with Spotify`);
@@ -236,7 +245,7 @@ async function syncUserSpotifyHistory(userId: string): Promise<number> {
     
     // Get the last sync time
     const lastSyncTime = await getLastSyncTime(userId);
-    logger.info(`Last sync time for user ${userId}: ${lastSyncTime.toISOString()}`);
+    debugLog(`Last sync time for user ${userId}: ${lastSyncTime.toISOString()}`);
     
     // Fetch recent tracks from Spotify
     const tracks = await fetchSpotifyRecentTracks(accessToken, lastSyncTime);
@@ -249,9 +258,9 @@ async function syncUserSpotifyHistory(userId: string): Promise<number> {
       // Update last sync time
       await updateLastSyncTime(userId);
       
-      logger.info(`Successfully synced ${trackCount} new tracks for user ${userId}`);
+      debugLog(`Successfully synced ${trackCount} new tracks for user ${userId}`);
     } else {
-      logger.info(`No new tracks found for user ${userId} since ${lastSyncTime.toISOString()}`);
+      debugLog(`No new tracks found for user ${userId} since ${lastSyncTime.toISOString()}`);
     }
     
   } catch (error) {
@@ -284,7 +293,7 @@ async function fetchSpotifyRecentTracks(accessToken: string, lastSyncTime: Date)
       }
     });
     
-    logger.info(`Spotify API response status: ${response.status}`);
+    debugLog(`Spotify API response status: ${response.status}`);
     
     if (!response.ok) {
       if (response.status === 401) {
@@ -300,7 +309,7 @@ async function fetchSpotifyRecentTracks(accessToken: string, lastSyncTime: Date)
     const data = await response.json();
     const tracks = data.items || [];
     
-    logger.info(`Fetched ${tracks.length} tracks from Spotify API`);
+    debugLog(`Fetched ${tracks.length} tracks from Spotify API`);
     
     return tracks;
     
@@ -338,7 +347,7 @@ async function refreshSpotifyAccessToken(refreshToken: string, userId: string): 
     
     const tokenData = await response.json();
     
-    logger.info(`Successfully refreshed Spotify token for user ${userId}`);
+    debugLog(`Successfully refreshed Spotify token for user ${userId}`);
     
     return {
       accessToken: tokenData.access_token,
@@ -358,7 +367,7 @@ async function refreshSpotifyAccessToken(refreshToken: string, userId: string): 
 
 async function decryptSpotifyTokens(tokenData: any, userId: string): Promise<any | null> {
   try {
-    logger.info(`Decrypting Spotify tokens for user ${userId}`);
+    debugLog(`Decrypting Spotify tokens for user ${userId}`);
     
     // Extract encrypted token data from Firestore format
     const encryptedData = tokenData.encryptedData;
@@ -397,7 +406,7 @@ async function decryptSpotifyTokens(tokenData: any, userId: string): Promise<any
       const fullDecrypted = Buffer.concat([decryptedBuffer, finalBuffer]);
       decrypted = fullDecrypted.toString('utf8');
       
-      logger.info('Successfully decrypted token data using AES-256-GCM');
+      debugLog('Successfully decrypted token data using AES-256-GCM');
       
     } catch (decryptError) {
       logger.error('GCM decryption failed:', decryptError);
@@ -426,7 +435,7 @@ async function decryptSpotifyTokens(tokenData: any, userId: string): Promise<any
       return null;
     }
     
-    logger.info(`Successfully decrypted tokens - hasRefreshToken: ${!!tokensData.refreshToken}`);
+    debugLog(`Successfully decrypted tokens - hasRefreshToken: ${!!tokensData.refreshToken}`);
     
     return {
       accessToken: tokensData.accessToken,
@@ -447,7 +456,7 @@ async function clearInvalidSpotifyTokens(userId: string): Promise<void> {
     .doc('spotify')
     .delete();
   
-  logger.info(`Cleared invalid Spotify tokens for user ${userId}`);
+  debugLog(`Cleared invalid Spotify tokens for user ${userId}`);
 }
 
 async function getLastSyncTime(userId: string): Promise<Date> {
@@ -476,7 +485,7 @@ async function getLastSyncTime(userId: string): Promise<Date> {
   // Default to 24 hours ago if no previous sync or invalid timestamp
   const oneDayAgo = new Date();
   oneDayAgo.setHours(oneDayAgo.getHours() - 24);
-  logger.info(`Using default last sync time: ${oneDayAgo.toISOString()}`);
+  debugLog(`Using default last sync time: ${oneDayAgo.toISOString()}`);
   return oneDayAgo;
 }
 
@@ -513,7 +522,7 @@ async function storeSpotifyTracks(userId: string, tracks: any[]): Promise<void> 
 
 async function storeRefreshedTokens(userId: string, tokens: any): Promise<void> {
   try {
-    logger.info(`Storing refreshed tokens for user ${userId}`);
+    debugLog(`Storing refreshed tokens for user ${userId}`);
     
     // Create tokens object matching iOS format
     const tokensToStore = {
@@ -541,7 +550,7 @@ async function storeRefreshedTokens(userId: string, tokens: any): Promise<void> 
         updatedAt: Date.now()
       });
       
-    logger.info(`Successfully stored refreshed tokens for user ${userId}`);
+    debugLog(`Successfully stored refreshed tokens for user ${userId}`);
     
   } catch (error) {
     logger.error(`Failed to store refreshed tokens for user ${userId}:`, error);

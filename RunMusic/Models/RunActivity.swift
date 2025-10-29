@@ -53,6 +53,48 @@ enum ShareableCardLayoutType: String, CaseIterable, Codable {
     }
 }
 
+// MARK: - Photo Assignment Caching
+
+struct PhotoAssignmentMetadata: Codable {
+    let searchDate: Date // When the photo search was performed
+    let assignmentType: PhotoAssignmentType // How the photo was assigned
+    let searchResults: PhotoSearchResults // What was found during search
+    
+    enum PhotoAssignmentType: String, Codable {
+        case runTimeframe = "run_timeframe" // Photo found during run time
+        case sameDayExpanded = "same_day_expanded" // Photo found on same day (expanded search)
+        case recentCameraRoll = "recent_camera_roll" // Fallback to recent photos
+        case defaultGradient = "default_gradient" // No photos found, using gradient
+        case userSelected = "user_selected" // User manually selected a photo
+    }
+    
+    struct PhotoSearchResults: Codable {
+        let runTimeframePhotos: Int // Number of photos found during run
+        let sameDayPhotos: Int // Number of photos found on same day
+        let recentPhotos: Int // Number of recent photos available
+        let hasPhotoLibraryAccess: Bool // Whether photo access was granted
+        let searchTimeMs: Double // How long the search took
+    }
+    
+    // Check if cached assignment is still valid (within 7 days)
+    var isValid: Bool {
+        let maxAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days
+        return Date().timeIntervalSince(searchDate) < maxAge
+    }
+    
+    // Check if we should prefer this cached result over searching again
+    var shouldUseCachedResult: Bool {
+        switch assignmentType {
+        case .runTimeframe, .userSelected:
+            return isValid // Always prefer run-time photos and user selections if valid
+        case .sameDayExpanded:
+            return isValid && searchResults.runTimeframePhotos == 0 // Only if no run-time photos were found
+        case .recentCameraRoll, .defaultGradient:
+            return isValid && searchResults.sameDayPhotos == 0 // Only if no better photos were found
+        }
+    }
+}
+
 struct LayoutSpecificSettings: Codable {
     // Shared settings (persist between layouts)
     var showCity: Bool? // nil = use default
@@ -66,6 +108,9 @@ struct LayoutSpecificSettings: Codable {
     var fontFamily: FontFamily? // nil = use default
     var albumArtDisplays: [AlbumArtDisplay]? // nil = no album art (visibility only, not positions)
     var powerSongDisplay: PowerSongDisplay? // nil = no power song display
+    
+    // Photo assignment caching
+    var photoAssignmentMetadata: PhotoAssignmentMetadata? // Cache photo search results
     
     // Layout-specific settings (independent per layout)
     var hasUnsavedChanges: Bool = false

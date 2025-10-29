@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct InteractivePowerSongView: View {
     @Binding var powerSongDisplay: PowerSongDisplay
@@ -10,6 +11,7 @@ struct InteractivePowerSongView: View {
     @State private var lastOffset = CGSize.zero
     @State private var lastScale: CGFloat = 1.0
     @State private var lastRotation: Angle = .zero
+    @State private var isBeingInteracted = false
     
     var body: some View {
         // Dynamic sizing container
@@ -70,6 +72,13 @@ struct InteractivePowerSongView: View {
             SimultaneousGesture(
                 DragGesture()
                     .onChanged { value in
+                        // Haptic feedback on first movement
+                        if !isBeingInteracted {
+                            let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                            impactFeedback.impactOccurred()
+                            isBeingInteracted = true
+                        }
+                        
                         // Update position based on drag using percentage-based positioning
                         let currentPosition = powerSongDisplay.absolutePosition(cardWidth: cardWidth, cardHeight: cardHeight)
                         let newX = currentPosition.x + value.translation.width
@@ -79,10 +88,25 @@ struct InteractivePowerSongView: View {
                     }
                     .onEnded { _ in
                         // Position is now stored in percentage form automatically
+                        isBeingInteracted = false
+                        
+                        // Haptic feedback on release
+                        let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                        impactFeedback.impactOccurred()
                     },
                 MagnificationGesture()
                     .onChanged { value in
-                        powerSongDisplay.scale = lastScale * value
+                        // Haptic feedback at scale thresholds
+                        let newScale = lastScale * value
+                        let oldScale = powerSongDisplay.scale
+                        
+                        // Feedback when crossing 0.5x increments
+                        if Int(oldScale * 2) != Int(newScale * 2) {
+                            let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                            impactFeedback.impactOccurred()
+                        }
+                        
+                        powerSongDisplay.scale = newScale
                         onTransformChanged()
                     }
                     .onEnded { value in

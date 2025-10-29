@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreLocation
+import Photos
 import os.log
 
 struct RunCardStackView: View {
@@ -105,8 +106,9 @@ struct RunCardStackView: View {
                 }
             }
             .navigationDestination(for: RunActivity.self) { run in
-                let _ = logger.info("🎨 Navigating to canvas for run: \(run.name) (ID: \(run.id))")
-                let _ = logger.info("🎨 Run has background photo: \(run.backgroundPhoto != nil)")
+                let _ = logger.info("🎨 NAVIGATION: RunCardStackView → RunCanvasDestinationView for run: \(run.name) (ID: \(run.id))")
+                let _ = logger.info("🎨 NAVIGATION: Run has background photo: \(run.portraitSettings.backgroundPhoto != nil)")
+                let _ = logger.info("🎨 NAVIGATION: Run has \(run.spotifyTracks?.count ?? 0) Spotify tracks")
                 return RunCanvasDestinationView(initialRun: run)
             }
         }
@@ -215,6 +217,18 @@ struct RunCardStackView: View {
             
             Spacer()
             
+            // Back to top button - takes you to most recent run
+            Button(action: {
+                scrollToTop()
+            }) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .foregroundColor(.primary)
+                    .font(.title2)
+            }
+            .disabled(runs.isEmpty || (swipedRuns.isEmpty && currentPage == 1))
+            .opacity(runs.isEmpty || (swipedRuns.isEmpty && currentPage == 1) ? 0.3 : 1.0)
+            
+            // Settings button
             Button(action: {
                 showingSettings = true
             }) {
@@ -364,10 +378,10 @@ struct RunCardStackView: View {
                 endTime: endTime
             )
             
-            // FALLBACK: If no tracks found in Firebase and Spotify is authenticated and run is recent (within 7 days), 
-            // try fetching from live Spotify API
-            if tracks.isEmpty && spotifyService.isAuthenticated && run.date > Date().addingTimeInterval(-7 * 24 * 60 * 60) {
-                logger.info("🌐 No tracks in Firebase for recent run, falling back to Spotify API")
+            // ENHANCED FALLBACK: If no tracks found in Firebase and Spotify is authenticated and run is very recent (within 1 hour), 
+            // try fetching from live Spotify API and cache the results
+            if tracks.isEmpty && spotifyService.isAuthenticated && run.date > Date().addingTimeInterval(-1 * 60 * 60) {
+                logger.info("🌐 REAL-TIME FETCH: No tracks in Firebase for recent run, fetching from live Spotify API")
                 do {
                     let recentTracks = try await spotifyService.fetchRecentTracks(limit: 50)
                     
@@ -397,6 +411,17 @@ struct RunCardStackView: View {
                         return isInRange
                     }
                     logger.info("🌐 Found \(tracks.count) tracks from Spotify API for time range")
+                    
+                    // CACHE TO FIREBASE: Save fetched tracks to Firebase for future use
+                    if !tracks.isEmpty {
+                        logger.info("💾 CACHING: Saving \(tracks.count) real-time fetched tracks to Firebase")
+                        Task.detached(priority: .background) {
+                            await self.spotifyService.storeImportedTracks(tracks)
+                            await MainActor.run {
+                                self.logger.info("✅ CACHED: Successfully saved \(tracks.count) tracks to Firebase")
+                            }
+                        }
+                    }
                 } catch {
                     logger.error("❌ Failed to fetch from Spotify API: \(error)")
                 }
@@ -582,7 +607,7 @@ struct RunCardStackView: View {
         // The top card is always index 0 (newest run)
         let isTopCard = index == 0
         
-        return RunCardView(run: run)
+        return RunStackCardView(run: run)
             .offset(y: cardOffset)
             .scaleEffect(cardScale)
             .zIndex(Double(2 - index)) // 0=front(zIndex:2), 1=middle(zIndex:1), 2=back(zIndex:0)
@@ -785,16 +810,21 @@ struct RunCardStackView: View {
     
     private func loadSpotifyDataForVisibleCardsOnly() async {
         let currentRuns = await MainActor.run { Array(runs.prefix(3)) } // Only first 3 cards
-        logger.info("🎵 CONSERVATIVE: Loading Spotify data for \(currentRuns.count) visible cards (Firebase + Spotify fallback)")
         
-        for (index, run) in currentRuns.enumerated() {
-            // Skip if already has Spotify data
-            guard run.spotifyTracks == nil || run.spotifyTracks?.isEmpty == true else {
-                logger.info("🎵 SKIP: Card [\(index)] '\(run.name)' already has \(run.spotifyTracks?.count ?? 0) tracks")
-                continue
-            }
-            
-            logger.info("🎵 LOADING: Card [\(index)] '\(run.name)' needs Spotify data")
+        // Filter to only runs that actually need Spotify data
+        let runsNeedingSpotify = currentRuns.filter { run in
+            run.spotifyTracks == nil || run.spotifyTracks?.isEmpty == true
+        }
+        
+        guard !runsNeedingSpotify.isEmpty else {
+            logger.info("🎵 SKIP: All visible cards already have Spotify data")
+            return
+        }
+        
+        logger.info("🎵 CONSERVATIVE: Loading Spotify data for \(runsNeedingSpotify.count)/\(currentRuns.count) visible cards that need it")
+        
+        for (index, run) in runsNeedingSpotify.enumerated() {
+            logger.info("🎵 LOADING: [\(index+1)/\(runsNeedingSpotify.count)] '\(run.name)' needs Spotify data")
             
             // Add small delay between requests for rate limiting
             if index > 0 {
@@ -907,6 +937,29 @@ struct RunCardStackView: View {
         await loadRunsForPage(page: 1, isRefresh: isRefresh, initialLoadLimit: 10)
     }
     
+    private func scrollToTop() {
+        // Reset pagination state
+        currentPage = 1
+        hasMoreRuns = true
+        
+        // Restore all swiped runs back to the main stack with animation
+        withAnimation(.easeInOut(duration: 0.5)) {
+            // Merge swiped runs back to the beginning of the runs array
+            if !swipedRuns.isEmpty {
+                runs = swipedRuns + runs
+                swipedRuns.removeAll()
+            }
+            
+            // Reset any drag offsets
+            dragOffset = .zero
+        }
+        
+        // Optionally refresh data to ensure we have the latest runs
+        Task {
+            await loadRuns(isRefresh: true)
+        }
+    }
+    
     private func loadRunsForPage(page: Int, isRefresh: Bool, initialLoadLimit: Int? = nil) async {
         // This is a simplified version of RunMusic's complex loading logic
         // Full implementation would include Firebase caching, pagination, etc.
@@ -921,7 +974,7 @@ struct RunCardStackView: View {
                     stravaService: stravaService,
                     page: page,
                     perPage: initialLoadLimit ?? 10,
-                    maxCacheAge: isRefresh ? 0 : 24 * 60 * 60 // Force fresh if refresh, else 24hr cache
+                    maxCacheAge: isRefresh ? 0 : 2 * 60 * 60 // Force fresh if refresh, else 2-hour cache for new run detection
                 )
                 runActivities = Array(cachedRuns.prefix(initialLoadLimit ?? 10))
                 logger.info("🏃 Loaded \(runActivities.count) runs via RunCacheService")
@@ -935,6 +988,42 @@ struct RunCardStackView: View {
                         let existingTrackCount = runActivities[i].spotifyTracks?.count ?? 0
                         if existingTrackCount > 0 {
                             logger.info("🎵 CACHED: Run '\(runActivities[i].name)' already has \(existingTrackCount) tracks from cache - preserving")
+                            
+                            // 🎨 ALBUM ART FIX: Enrich cached tracks with album art if missing
+                            if let tracks = runActivities[i].spotifyTracks {
+                                // DEBUG: Log actual album art URLs
+                                logger.info("🎨 DEBUG: Cached track album art URLs:")
+                                for (index, track) in tracks.enumerated() {
+                                    let url = track.albumImageURL ?? "nil"
+                                    logger.info("  \(index + 1). '\(track.name)' - Album URL: \(url)")
+                                }
+                                
+                                let tracksNeedingArt = tracks.filter { track in
+                                    track.albumImageURL == nil || track.albumImageURL?.isEmpty == true
+                                }
+                                
+                                if !tracksNeedingArt.isEmpty {
+                                    logger.info("🎨 CACHED ENRICHMENT: \(tracksNeedingArt.count) cached tracks need album art")
+                                    let enrichedTracks = await spotifyService.enrichTracksWithAlbumArt(tracksNeedingArt)
+                                    
+                                    // Update the run with enriched album art
+                                    var updatedTracks = tracks
+                                    for enrichedTrack in enrichedTracks {
+                                        if let index = updatedTracks.firstIndex(where: { $0.id == enrichedTrack.id }) {
+                                            updatedTracks[index] = enrichedTrack
+                                        }
+                                    }
+                                    
+                                    runActivities[i].spotifyTracks = updatedTracks
+                                    logger.info("🎨 CACHED ENRICHMENT: Updated cached run with album art")
+                                    
+                                    // Update cache with enriched data
+                                    await RunCacheService.shared.updateCachedRun(runActivities[i])
+                                } else {
+                                    logger.info("🎨 CACHED: All \(existingTrackCount) tracks already have album art")
+                                }
+                            }
+                            
                             continue
                         }
                         
@@ -945,10 +1034,10 @@ struct RunCardStackView: View {
                             endTime: endTime
                         )
                         
-                        // FALLBACK: If no tracks found in Firebase and Spotify is authenticated and run is recent (within 7 days), 
-                        // try fetching from live Spotify API
-                        if tracks.isEmpty && spotifyService.isAuthenticated && runActivities[i].date > Date().addingTimeInterval(-7 * 24 * 60 * 60) {
-                            logger.info("🌐 No tracks in Firebase for recent run, falling back to Spotify API")
+                        // ENHANCED FALLBACK: If no tracks found in Firebase and Spotify is authenticated and run is very recent (within 1 hour), 
+                        // try fetching from live Spotify API and cache the results
+                        if tracks.isEmpty && spotifyService.isAuthenticated && runActivities[i].date > Date().addingTimeInterval(-1 * 60 * 60) {
+                            logger.info("🌐 REAL-TIME FETCH: No tracks in Firebase for recent run, fetching from live Spotify API")
                             do {
                                 let recentTracks = try await spotifyService.fetchRecentTracks(limit: 50)
                                 
@@ -978,6 +1067,17 @@ struct RunCardStackView: View {
                                     return isInRange
                                 }
                                 logger.info("🌐 Found \(tracks.count) tracks from Spotify API for time range")
+                                
+                                // CACHE TO FIREBASE: Save fetched tracks to Firebase for future use
+                                if !tracks.isEmpty {
+                                    logger.info("💾 CACHING: Saving \(tracks.count) real-time fetched tracks to Firebase")
+                                    Task.detached(priority: .background) {
+                                        await self.spotifyService.storeImportedTracks(tracks)
+                                        await MainActor.run {
+                                            self.logger.info("✅ CACHED: Successfully saved \(tracks.count) tracks to Firebase")
+                                        }
+                                    }
+                                }
                             } catch {
                                 logger.error("❌ Failed to fetch from Spotify API: \(error)")
                             }
@@ -1092,7 +1192,58 @@ struct RunCardStackView: View {
         }
     }
     
+    // Helper function to update run background with caching metadata
+    @MainActor
+    private func updateRunBackgroundWithMetadata(runId: String, photoBackground: RunPhotoBackground, metadata: PhotoAssignmentMetadata) {
+        if let index = runs.firstIndex(where: { $0.id == runId }) {
+            runs[index].portraitSettings.backgroundPhoto = photoBackground
+            runs[index].portraitSettings.photoAssignmentMetadata = metadata
+            logger.info("📷 ✅ Updated background photo with metadata for run '\(runs[index].name)' (type: \(metadata.assignmentType.rawValue))")
+        } else {
+            logger.warning("📷 ❌ Could not find run with ID \(runId) to update background with metadata")
+        }
+    }
+    
+    // Helper function for user-selected backgrounds (invalidates cache)
+    @MainActor
+    func setUserSelectedBackground(runId: String, photoBackground: RunPhotoBackground) {
+        if let index = runs.firstIndex(where: { $0.id == runId }) {
+            // Create user-selected metadata to prevent automatic reassignment
+            let metadata = PhotoAssignmentMetadata(
+                searchDate: Date(),
+                assignmentType: .userSelected,
+                searchResults: PhotoAssignmentMetadata.PhotoSearchResults(
+                    runTimeframePhotos: 0, // Not relevant for user selection
+                    sameDayPhotos: 0,
+                    recentPhotos: 0,
+                    hasPhotoLibraryAccess: true, // User is actively selecting
+                    searchTimeMs: 0
+                )
+            )
+            
+            runs[index].portraitSettings.backgroundPhoto = photoBackground
+            runs[index].portraitSettings.photoAssignmentMetadata = metadata
+            logger.info("📷 ✅ User manually selected background for run '\(runs[index].name)' - cache invalidated")
+        } else {
+            logger.warning("📷 ❌ Could not find run with ID \(runId) to set user-selected background")
+        }
+    }
+    
+    // Helper function to clear background and allow reassignment
+    @MainActor
+    func clearRunBackground(runId: String) {
+        if let index = runs.firstIndex(where: { $0.id == runId }) {
+            runs[index].portraitSettings.backgroundPhoto = nil
+            runs[index].portraitSettings.photoAssignmentMetadata = nil
+            logger.info("📷 ✅ Cleared background for run '\(runs[index].name)' - will be reassigned automatically")
+        } else {
+            logger.warning("📷 ❌ Could not find run with ID \(runId) to clear background")
+        }
+    }
+    
     private func assignBackgroundPhotos() async {
+        let startTime = Date()
+        
         // Create a safe snapshot of runs to avoid concurrent modification issues
         let runsSnapshot = await MainActor.run { Array(runs) }
         logger.info("📷 Starting photo assignment for \(runsSnapshot.count) runs...")
@@ -1106,18 +1257,37 @@ struct RunCardStackView: View {
         
         for (index, var run) in runsSnapshot.enumerated() {
             // Skip if run already has a custom background photo
-            guard run.backgroundPhoto == nil else { 
+            guard run.portraitSettings.backgroundPhoto == nil else { 
                 logger.info("📷 Skipping '\(run.name)' - already has photo background")
                 continue 
             }
             
+            // Check if we have valid cached photo assignment metadata
+            if let metadata = run.portraitSettings.photoAssignmentMetadata,
+               metadata.shouldUseCachedResult {
+                logger.info("📷 Using cached photo assignment for '\(run.name)' (type: \(metadata.assignmentType.rawValue))")
+                
+                // If cache says no photos were found, create default background
+                if metadata.assignmentType == .defaultGradient {
+                    if let defaultBackground = await createDefaultBackground(for: run) {
+                        await updateRunBackground(runId: run.id, photoBackground: defaultBackground)
+                        logger.info("📷 Applied cached default background for '\(run.name)'")
+                    }
+                }
+                continue
+            }
+            
             logger.info("📷 Processing run '\(run.name)' (\(run.date))")
+            let searchStartTime = Date()
             
             // Fetch photos from the run timeframe
             let photos = await PhotoService.shared.fetchPhotosForRun(
                 date: run.date,
                 duration: run.elapsedTime
             )
+            
+            var expandedPhotos: [PHAsset] = []
+            var recentPhotos: [PHAsset] = []
             
             // If photos are available during run timeframe, use the first one
             if !photos.isEmpty {
@@ -1126,8 +1296,22 @@ struct RunCardStackView: View {
                     from: photos,
                     filterType: .blur
                 ) {
-                    await updateRunBackground(runId: run.id, photoBackground: photoBackground)
-                    logger.info("✅ Using timeframe photo for run '\(run.name)'")
+                    // Create metadata for run timeframe assignment
+                    let searchTime = Date().timeIntervalSince(searchStartTime) * 1000 // Convert to ms
+                    let metadata = PhotoAssignmentMetadata(
+                        searchDate: Date(),
+                        assignmentType: .runTimeframe,
+                        searchResults: PhotoAssignmentMetadata.PhotoSearchResults(
+                            runTimeframePhotos: photos.count,
+                            sameDayPhotos: 0, // Not searched yet
+                            recentPhotos: 0, // Not searched yet
+                            hasPhotoLibraryAccess: hasAccess,
+                            searchTimeMs: searchTime
+                        )
+                    )
+                    
+                    await updateRunBackgroundWithMetadata(runId: run.id, photoBackground: photoBackground, metadata: metadata)
+                    logger.info("✅ Using timeframe photo for run '\(run.name)' (cached for future)")
                     continue
                 } else {
                     logger.error("❌ Failed to create photo background from timeframe photos for '\(run.name)'")
@@ -1140,7 +1324,7 @@ struct RunCardStackView: View {
                 
                 logger.info("📷 No run-time photos, expanding to same day for run '\(run.name)'")
                 
-                let expandedPhotos = await PhotoService.shared.fetchPhotosForRun(
+                expandedPhotos = await PhotoService.shared.fetchPhotosForRun(
                     date: expandedStartTime,
                     duration: 48 * 60 * 60 // 2 day window
                 )
@@ -1151,8 +1335,22 @@ struct RunCardStackView: View {
                         from: expandedPhotos,
                         filterType: .blur
                     ) {
-                        await updateRunBackground(runId: run.id, photoBackground: photoBackground)
-                        logger.info("✅ Using same-day photo for run '\(run.name)'")
+                        // Create metadata for same-day expanded assignment
+                        let searchTime = Date().timeIntervalSince(searchStartTime) * 1000
+                        let metadata = PhotoAssignmentMetadata(
+                            searchDate: Date(),
+                            assignmentType: .sameDayExpanded,
+                            searchResults: PhotoAssignmentMetadata.PhotoSearchResults(
+                                runTimeframePhotos: photos.count,
+                                sameDayPhotos: expandedPhotos.count,
+                                recentPhotos: 0, // Not searched yet
+                                hasPhotoLibraryAccess: hasAccess,
+                                searchTimeMs: searchTime
+                            )
+                        )
+                        
+                        await updateRunBackgroundWithMetadata(runId: run.id, photoBackground: photoBackground, metadata: metadata)
+                        logger.info("✅ Using same-day photo for run '\(run.name)' (cached for future)")
                         continue
                     } else {
                         logger.error("❌ Failed to create photo background from expanded timeframe photos for '\(run.name)'")
@@ -1162,7 +1360,7 @@ struct RunCardStackView: View {
                 }
                 
                 // Third fallback: recent photos from camera roll (most recent 50)
-                let recentPhotos = await PhotoService.shared.fetchPhotosForRun(
+                recentPhotos = await PhotoService.shared.fetchPhotosForRun(
                     date: Date().addingTimeInterval(-30 * 24 * 60 * 60), // Last 30 days
                     duration: 30 * 24 * 60 * 60 // 30 day window
                 )
@@ -1172,16 +1370,44 @@ struct RunCardStackView: View {
                         from: recentPhotos,
                         filterType: .blur
                     ) {
-                        await updateRunBackground(runId: run.id, photoBackground: photoBackground)
-                        logger.info("📷 Using recent camera roll photo as fallback for run '\(run.name)'")
+                        // Create metadata for recent camera roll assignment
+                        let searchTime = Date().timeIntervalSince(searchStartTime) * 1000
+                        let metadata = PhotoAssignmentMetadata(
+                            searchDate: Date(),
+                            assignmentType: .recentCameraRoll,
+                            searchResults: PhotoAssignmentMetadata.PhotoSearchResults(
+                                runTimeframePhotos: photos.count,
+                                sameDayPhotos: expandedPhotos.count,
+                                recentPhotos: recentPhotos.count,
+                                hasPhotoLibraryAccess: hasAccess,
+                                searchTimeMs: searchTime
+                            )
+                        )
+                        
+                        await updateRunBackgroundWithMetadata(runId: run.id, photoBackground: photoBackground, metadata: metadata)
+                        logger.info("📷 Using recent camera roll photo as fallback for run '\(run.name)' (cached for future)")
                         continue
                     }
                 }
                 
                 // Ultimate fallback: Create a default background for simulator/testing
                 if let defaultBackground = await createDefaultBackground(for: run) {
-                    await updateRunBackground(runId: run.id, photoBackground: defaultBackground)
-                    logger.info("📷 Using default background for simulator for run '\(run.name)'")
+                    // Create metadata for default gradient assignment
+                    let searchTime = Date().timeIntervalSince(searchStartTime) * 1000
+                    let metadata = PhotoAssignmentMetadata(
+                        searchDate: Date(),
+                        assignmentType: .defaultGradient,
+                        searchResults: PhotoAssignmentMetadata.PhotoSearchResults(
+                            runTimeframePhotos: photos.count,
+                            sameDayPhotos: expandedPhotos.count,
+                            recentPhotos: recentPhotos.count,
+                            hasPhotoLibraryAccess: hasAccess,
+                            searchTimeMs: searchTime
+                        )
+                    )
+                    
+                    await updateRunBackgroundWithMetadata(runId: run.id, photoBackground: defaultBackground, metadata: metadata)
+                    logger.info("📷 Using default background for simulator for run '\(run.name)' (cached for future)")
                 } else {
                     logger.info("📷 No photos available for run '\(run.name)'")
                 }
@@ -1431,10 +1657,14 @@ struct RunCanvasDestinationView: View {
     init(initialRun: RunActivity) {
         self.initialRun = initialRun
         self._run = State(initialValue: initialRun)
+        print("🎨 VIEW INIT: RunCanvasDestinationView created for run: \(initialRun.name)")
     }
     
     var body: some View {
         SimpleRunCanvasView(run: $run)
+            .onAppear {
+                print("🎨 VIEW APPEAR: RunCanvasDestinationView appeared for run: \(run.name)")
+            }
     }
 }
 
@@ -1447,47 +1677,100 @@ struct SimpleRunCanvasView: View {
     @State private var selectedAsset: CanvasAsset?
     @State private var showingAddAssetMenu = false
     @State private var showingEditSheet = false
+    @State private var hasInitializedAssets = false
+    
+    init(run: Binding<RunActivity>) {
+        self._run = run
+        print("📱 CANVAS SYSTEM: ✅ SimpleRunCanvasView is the CURRENT/MODERN system")
+        print("🎨 VIEW INIT: SimpleRunCanvasView created for run: \(run.wrappedValue.name)")
+        print("🎨 VIEW INIT: Run has \(run.wrappedValue.spotifyTracks?.count ?? 0) Spotify tracks")
+    }
     
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 // Background layer - photo background with fallback
                 Group {
-                    if let photoBackground = run.backgroundPhoto,
-                       photoBackground.photoData != nil {
+                    if let photoBackground = run.portraitSettings.backgroundPhoto {
                         PhotoBackgroundView(photoBackground: photoBackground)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .clipped()
                     } else {
-                        Color(.systemGray6)
-                            .ignoresSafeArea()
+                        // Default gradient background
+                        LinearGradient(
+                            colors: [
+                                Color.blue.opacity(0.3),
+                                Color.purple.opacity(0.2),
+                                Color.pink.opacity(0.1),
+                                Color.black.opacity(0.8)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        .ignoresSafeArea()
                     }
                 }
                 
-                // Canvas area
-                ZStack {
-                    // Tap area to deselect
-                    Rectangle()
-                        .fill(Color.clear)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            selectedAsset = nil
-                        }
-                    
-                    // Render single simple asset
-                    ForEach(assets) { asset in
-                        SimpleAssetView(
-                            asset: asset,
-                            isSelected: selectedAsset?.id == asset.id,
-                            onSelect: {
-                                selectedAsset = asset
-                            },
-                            onUpdate: { updatedAsset in
-                                if let index = assets.firstIndex(where: { $0.id == updatedAsset.id }) {
-                                    assets[index] = updatedAsset
+                // Canvas area using percentage-based positioning (Unit Coordinate Space 0.0-1.0)
+                GeometryReader { canvasGeometry in
+                    ZStack {
+                        // Tap area to deselect
+                        Rectangle()
+                            .fill(Color.clear)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedAsset = nil
+                            }
+                        
+                        // Render assets using edge-based alignment
+                        ForEach(assets.filter { $0.isVisible }) { asset in
+                            // Use alignment-based positioning if available, fallback to percentage
+                            if let alignment = asset.alignment {
+                                AlignmentBasedAssetView(
+                                    asset: asset,
+                                    isSelected: selectedAsset?.id == asset.id,
+                                    canvasSize: canvasGeometry.size,
+                                    alignment: alignment,
+                                    onSelect: {
+                                        selectedAsset = asset
+                                    },
+                                    onUpdate: { updatedAsset in
+                                        updateAsset(updatedAsset)
+                                    },
+                                    onEdit: { asset in
+                                        selectedAsset = asset
+                                        if asset.editableType != .none {
+                                            showingEditSheet = true
+                                        }
+                                    }
+                                )
+                                .onAppear {
+                                    print("📱 CANVAS VIEW USAGE: AlignmentBasedAssetView LOADED for \(asset.type) with alignment \(alignment)")
+                                }
+                            } else {
+                                // Fallback to percentage positioning
+                                PercentagePositionedAssetView(
+                                    asset: asset,
+                                    isSelected: selectedAsset?.id == asset.id,
+                                    canvasSize: canvasGeometry.size,
+                                    onSelect: {
+                                        selectedAsset = asset
+                                    },
+                                    onUpdate: { updatedAsset in
+                                        updateAsset(updatedAsset)
+                                    },
+                                    onEdit: { asset in
+                                        selectedAsset = asset
+                                        if asset.editableType != .none {
+                                            showingEditSheet = true
+                                        }
+                                    }
+                                )
+                                .onAppear {
+                                    print("📱 CANVAS VIEW USAGE: PercentagePositionedAssetView LOADED for \(asset.type) at position (\(asset.position.x), \(asset.position.y))")
                                 }
                             }
-                        )
+                        }
                     }
                 }
                 
@@ -1561,10 +1844,22 @@ struct SimpleRunCanvasView: View {
                 }
             }
             .onAppear {
+                print("🎨 VIEW APPEAR: SimpleRunCanvasView onAppear for run: \(run.name)")
                 canvasSize = geometry.size
-                setupSimpleAssets()
-                // Calculate power song if needed
-                calculatePowerSongIfNeeded()
+                if !hasInitializedAssets {
+                    setupSimpleAssets()
+                    hasInitializedAssets = true
+                }
+                // Calculate power song asynchronously to prevent UI blocking
+                Task {
+                    calculatePowerSongIfNeeded()
+                }
+            }
+            .onChange(of: geometry.size) { _, newSize in
+                // Only update canvas size - don't regenerate assets to preserve user changes
+                print("🎨 GEOMETRY CHANGE: Canvas size changed from \(canvasSize) to \(newSize) - preserving asset positions")
+                canvasSize = newSize
+                // Assets keep their percentage-based positions, so they'll automatically scale
             }
         }
         .navigationBarHidden(true)
@@ -1592,142 +1887,111 @@ struct SimpleRunCanvasView: View {
     }
     
     private func setupSimpleAssets() {
+        print("📱 CANVAS SYSTEM: ✅ SimpleRunCanvasView is ACTIVELY USED")
         print("🎨 SIMPLE CANVAS: Setting up assets for run: \(run.name)")
         print("🎨 SIMPLE CANVAS: Canvas size: \(canvasSize)")
-        var newAssets: [CanvasAsset] = []
+        print("🎨 SIMPLE CANVAS: Run has \(run.spotifyTracks?.count ?? 0) Spotify tracks")
         
-        // Combined title and distance asset
-        let userPrefs = UserPreferences.shared
-        let distanceValue: Double
-        let unit: String
-        
-        switch userPrefs.distanceUnit {
-        case .miles:
-            distanceValue = run.distance / 1609.34
-            unit = "mi"
-        case .kilometers:
-            distanceValue = run.distance / 1000.0
-            unit = "km"
+        // Safety check: Don't create assets if canvas size is invalid
+        guard canvasSize.width > 0 && canvasSize.height > 0 else {
+            print("🎨 SIMPLE CANVAS: Canvas size is invalid, skipping asset setup")
+            return
         }
         
-        // Stats line asset (top right) - moved to very top
-        let statsCluster = StatsCluster(run: run)
-        let statsAsset = CanvasAsset(
-            type: .stats,
-            content: .stats(statsCluster),
-            position: CGPoint(x: canvasSize.width - 120, y: canvasSize.height * 0.05)
-        )
-        newAssets.append(statsAsset)
-        
-        // Location asset - moved higher with less spacing
-        if let location = run.smartLocationDisplay {
-            let locationAsset = CanvasAsset(
-                type: .location,
-                content: .location(location.lowercased()),
-                position: CGPoint(x: canvasSize.width - 120, y: canvasSize.height * 0.1),
-                fontSize: 12,
-                fontWeight: .medium,
-                color: .orange
-            )
-            newAssets.append(locationAsset)
-        }
-        
-        // Title and distance - moved higher, just below location
-        let titleDistanceAsset = CanvasAsset(
-            type: .titleDistance,
-            content: .titleDistance(title: run.name, distance: distanceValue, unit: unit),
-            position: CGPoint(x: canvasSize.width / 2, y: canvasSize.height * 0.18),
-            fontSize: 32,
-            fontWeight: .bold,
-            color: .orange // Will be overridden by gradient
-        )
-        newAssets.append(titleDistanceAsset)
-        
-        // Add route below title if available - made bigger and positioned higher
-        if !run.routeCoordinates.isEmpty {
-            let routeAsset = CanvasAsset.createRoute(
-                for: run,
-                position: CGPoint(x: canvasSize.width / 2, y: canvasSize.height * 0.35)
-            )
-            // Increase the scale to make it bigger
-            var scaledRouteAsset = routeAsset
-            scaledRouteAsset.scale = 1.2
-            newAssets.append(scaledRouteAsset)
-        }
-        
-        // Add song list if available - positioned from left edge with padding
-        if let tracks = run.spotifyTracks, !tracks.isEmpty {
-            print("🎵 SIMPLE CANVAS DEBUG - Song List Section:")
-            print("  - Total tracks: \(tracks.count)")
-            print("  - Visible tracks: \(tracks.filter { $0.isVisible }.count)")
-            print("  - Sample track names: \(tracks.prefix(3).map { $0.name }.joined(separator: ", "))")
-            print("  - Sample track isVisible values: \(tracks.prefix(3).map { $0.isVisible })")
-            
-            let songListAsset = CanvasAsset.createSongList(
-                for: run, 
-                position: CGPoint(x: 200, y: canvasSize.height * 0.7)
-            )
-            newAssets.append(songListAsset)
-            print("🎵 SIMPLE CANVAS: Song list asset created and added to canvas")
-        } else {
-            print("🎵 SIMPLE CANVAS DEBUG - No Song List:")
-            print("  - run.spotifyTracks is nil: \(run.spotifyTracks == nil)")
-            print("  - tracks array is empty: \(run.spotifyTracks?.isEmpty ?? true)")
-        }
-        
-        // Add power song if available - right-aligned with screen edge
-        print("🔥 DEBUG: Checking power song for run: \(run.name)")
-        print("🔥 DEBUG: run.powerSong exists: \(run.powerSong != nil)")
-        if let powerSong = run.powerSong {
-            print("🔥 DEBUG: Power song found: \(powerSong.name) by \(powerSong.artist)")
-        }
-        print("🔥 DEBUG: run.powerSongPacePerMile: \(run.powerSongPacePerMile ?? "nil")")
-        
-        if let powerSongAsset = CanvasAsset.createPowerSong(
-            for: run, 
-            // Position power song more conservatively to ensure it's fully visible
-            position: CGPoint(x: canvasSize.width * 0.5, y: canvasSize.height * 0.75)
-        ) {
-            print("🔥 DEBUG: Power song asset created successfully")
-            newAssets.append(powerSongAsset)
-        } else {
-            print("🔥 DEBUG: Failed to create power song asset - no power song data")
-        }
-        
-        // Add album art for albums with 3+ songs
-        let availableAlbumArt = run.availableAlbumArt
-        print("🎨 Album Art Debug for run: \(run.name)")
-        print("🎨 Available album art count: \(availableAlbumArt.count)")
-        
-        for (index, albumArt) in availableAlbumArt.prefix(4).enumerated() {
-            // Debug logging for album art URL
-            print("🎨 Album Art Debug: Album '\(albumArt.albumName)' by \(albumArt.artistName)")
-            if let imageURL = albumArt.imageURL, !imageURL.isEmpty {
-                print("🎨 Album Art URL: \(imageURL)")
-            } else {
-                print("🎨 Album Art URL: empty/nil - enrichment available in Settings")
-                // DISABLED: Automatic enrichment to prevent API abuse
-                // User can manually trigger enrichment from Settings if desired
+        // Debug Spotify tracks before generating assets
+        if let tracks = run.spotifyTracks {
+            print("🎨 SIMPLE CANVAS: Analyzing tracks for album art:")
+            let albumGroups = Dictionary(grouping: tracks) { track in
+                "\(track.album ?? "Unknown")||\(track.artist)"
             }
-            
-            // Position album art in a grid pattern
-            let row = index / 2
-            let col = index % 2
-            
-            let albumAsset = CanvasAsset.createAlbumArt(
-                imageURL: albumArt.imageURL,
-                imageData: nil, // Will be loaded asynchronously
-                albumName: albumArt.albumName,
-                artistName: albumArt.artistName,
-                position: CGPoint(
-                    x: canvasSize.width * 0.7 + CGFloat(col * 80),
-                    y: canvasSize.height * 0.65 + CGFloat(row * 80)
-                )
-            )
-            newAssets.append(albumAsset)
+            for (albumKey, albumTracks) in albumGroups {
+                let parts = albumKey.split(separator: "||")
+                let albumName = String(parts.first ?? "Unknown")
+                let artistName = String(parts.last ?? "Unknown")
+                print("🎨   Album: '\(albumName)' by '\(artistName)' - \(albumTracks.count) tracks")
+                if albumTracks.count >= 3 {
+                    let tracksWithUrls = albumTracks.filter { $0.albumImageURL != nil && !$0.albumImageURL!.isEmpty }
+                    print("🎨   ✅ Qualifies for album art! Tracks with URLs: \(tracksWithUrls.count)/\(albumTracks.count)")
+                    if let sampleUrl = tracksWithUrls.first?.albumImageURL {
+                        print("🎨   Sample URL: \(sampleUrl)")
+                    } else {
+                        print("🎨   ⚠️ NO ALBUM ART URLS! Will show placeholder for now")
+                        // Note: Album art enrichment will happen in background via existing progressive loading
+                    }
+                }
+            }
         }
         
-        assets = newAssets
+        // Use our centralized asset generation system
+        assets = CanvasAsset.generateDefaultAssets(for: run, canvasSize: canvasSize)
+        print("🎨 SIMPLE CANVAS: Generated \(assets.count) assets using CanvasAsset.generateDefaultAssets")
+        
+        // Log which positioning systems will be used
+        let alignmentBasedAssets = assets.filter { $0.alignment != nil }
+        let absolutePositionAssets = assets.filter { $0.alignment == nil }
+        print("📱 ASSET VIEW DISTRIBUTION: \(alignmentBasedAssets.count) will use AlignmentBasedAssetView, \(absolutePositionAssets.count) will use PercentagePositionedAssetView")
+        
+        // Debug key assets only
+        let albumArtAssets = assets.filter { $0.type == .albumArt }
+        if !albumArtAssets.isEmpty {
+            print("🎨 SIMPLE CANVAS: Generated \(albumArtAssets.count) album art assets")
+            for asset in albumArtAssets {
+                if case .albumArt(let imageURL, _, let albumName, let artistName) = asset.content {
+                    print("🎨 SIMPLE CANVAS: Album art - '\(albumName)' at (\(asset.position.x), \(asset.position.y))")
+                }
+            }
+        }
+    }
+    
+    private func updateAsset(_ updatedAsset: CanvasAsset) {
+        if let index = assets.firstIndex(where: { $0.id == updatedAsset.id }) {
+            let oldPosition = assets[index].anchorPoint
+            assets[index] = updatedAsset
+            print("🔄 ASSET UPDATE: \(updatedAsset.type.displayName) position updated")
+            print("🔄   Old position: (\(oldPosition?.x ?? 0.5), \(oldPosition?.y ?? 0.5))")
+            print("🔄   New position: (\(updatedAsset.anchorPoint?.x ?? 0.5), \(updatedAsset.anchorPoint?.y ?? 0.5))")
+            print("🔄   Assets array count: \(assets.count)")
+        } else {
+            print("🚨 ASSET UPDATE FAILED: Could not find asset with id \(updatedAsset.id) in assets array")
+        }
+    }
+    
+    private func updateAssetsWithEnrichedAlbumArt() {
+        print("🎨 PRESERVING USER CHANGES: Updating album art without regenerating assets")
+        // Update existing album art assets with new URLs without changing positions
+        for index in assets.indices {
+            if assets[index].type == .albumArt {
+                if case .albumArt(_, let imageData, let albumName, let artistName) = assets[index].content {
+                    // Find corresponding track for URL
+                    if let tracks = run.spotifyTracks {
+                        for track in tracks {
+                            if track.album == albumName {
+                                assets[index].content = .albumArt(
+                                    imageURL: track.albumImageURL,
+                                    imageData: imageData,
+                                    albumName: albumName,
+                                    artistName: artistName
+                                )
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func updateAssetsWithPowerSong() {
+        print("🎨 PRESERVING USER CHANGES: Updating power song without regenerating assets")
+        // Update existing power song asset without changing position
+        for index in assets.indices {
+            if assets[index].type == .powerSong {
+                if let powerSong = run.powerSong {
+                    assets[index].content = .powerSong(powerSong, pace: run.powerSongPacePerMile)
+                }
+                break
+            }
+        }
     }
     
     private func addNewAsset(type: AssetType) {
@@ -1849,8 +2113,8 @@ struct SimpleRunCanvasView: View {
                 // Clear selection before regenerating to prevent crashes
                 selectedAsset = nil
                 
-                // Force a UI refresh by regenerating assets with updated album art
-                setupSimpleAssets()
+                // Update existing assets with enriched album art instead of regenerating
+                updateAssetsWithEnrichedAlbumArt()
             } else {
                 print("🎨 ⚠️ No tracks were successfully updated")
             }
@@ -1862,6 +2126,51 @@ struct SimpleRunCanvasView: View {
                 print("🚨 Error domain: \(error.domain), code: \(error.code)")
                 print("🚨 User info: \(error.userInfo)")
             }
+        }
+    }
+    
+    // MARK: - Album Art Enrichment
+    
+    private func enrichAlbumArtForRun() async {
+        guard let tracks = run.spotifyTracks, !tracks.isEmpty else {
+            print("🎨 ENRICH: No tracks to enrich")
+            return
+        }
+        
+        // Find tracks that need album art URLs
+        let tracksNeedingArt = tracks.filter { track in
+            track.albumImageURL == nil || track.albumImageURL?.isEmpty == true
+        }
+        
+        guard !tracksNeedingArt.isEmpty else {
+            print("🎨 ENRICH: All tracks already have album art")
+            return
+        }
+        
+        print("🎨 ENRICH: Enriching \(tracksNeedingArt.count) tracks with album art")
+        
+        do {
+            let enrichedTracks = await SpotifyService.shared.enrichTracksWithAlbumArt(tracksNeedingArt)
+            
+            await MainActor.run {
+                // Update the run's tracks with enriched album art
+                var updatedTracks = run.spotifyTracks ?? []
+                
+                for enrichedTrack in enrichedTracks {
+                    if let index = updatedTracks.firstIndex(where: { $0.id == enrichedTrack.id }) {
+                        updatedTracks[index] = enrichedTrack
+                    }
+                }
+                
+                run.spotifyTracks = updatedTracks
+                
+                print("🎨 ENRICH: ✅ Updated run with enriched album art")
+                
+                // Update existing assets with new album art URLs instead of regenerating
+                updateAssetsWithEnrichedAlbumArt()
+            }
+        } catch {
+            print("🎨 ENRICH: ❌ Failed to enrich album art: \(error)")
         }
     }
     
@@ -1900,16 +2209,20 @@ struct SimpleRunCanvasView: View {
                 
                 let streams = try await StravaService.shared.fetchActivityStreams(id: activityId, types: ["time", "latlng"])
                 
+                // Calculate Power Song using the same logic (off main thread)
+                var updatedRun = run
+                DataConversionService.shared.calculatePowerSong(for: &updatedRun, from: streams)
+                
                 await MainActor.run {
-                    // Calculate Power Song using the same logic
-                    DataConversionService.shared.calculatePowerSong(for: &run, from: streams)
+                    // Update run on main thread
+                    run = updatedRun
                     
                     if let powerSong = run.powerSong {
                         let pace = run.powerSongPacePerMile ?? "Unknown"
                         print("🔥 POWER SONG SUCCESS: '\(powerSong.name)' by \(powerSong.artist) - Pace: \(pace)")
                         
-                        // Update the assets to include the new power song
-                        setupSimpleAssets()
+                        // Update existing assets with power song instead of regenerating
+                        updateAssetsWithPowerSong()
                     } else {
                         print("🔥 POWER SONG: No Power Song calculated for \(run.name)")
                     }
@@ -1918,6 +2231,466 @@ struct SimpleRunCanvasView: View {
                 print("🔥 POWER SONG ERROR: Failed to calculate for \(run.name): \(error)")
             }
         }
+    }
+}
+
+// MARK: - Alignment Extension
+
+extension Alignment {
+    func asCGPoint(in size: CGSize) -> CGPoint {
+        switch self {
+        case .topLeading: return CGPoint(x: 0, y: 0)
+        case .top: return CGPoint(x: size.width / 2, y: 0)
+        case .topTrailing: return CGPoint(x: size.width, y: 0)
+        case .leading: return CGPoint(x: 0, y: size.height / 2)
+        case .center: return CGPoint(x: size.width / 2, y: size.height / 2)
+        case .trailing: return CGPoint(x: size.width, y: size.height / 2)
+        case .bottomLeading: return CGPoint(x: 0, y: size.height)
+        case .bottom: return CGPoint(x: size.width / 2, y: size.height)
+        case .bottomTrailing: return CGPoint(x: size.width, y: size.height)
+        default: return CGPoint(x: size.width / 2, y: size.height / 2)
+        }
+    }
+}
+
+// MARK: - Percentage-Based Positioned Asset View (Unit Coordinate Space 0.0-1.0)
+
+struct PercentagePositionedAssetView: View {
+    let asset: CanvasAsset
+    let isSelected: Bool
+    let canvasSize: CGSize
+    let onSelect: () -> Void
+    let onUpdate: (CanvasAsset) -> Void
+    var onEdit: ((CanvasAsset) -> Void)? = nil
+    
+    // Gesture state for interactions
+    @State private var gestureMode: GestureMode = .none
+    @State private var dragOffset: CGSize = .zero
+    
+    enum GestureMode {
+        case none, dragging, scaling, rotating
+    }
+    
+    
+    var body: some View {
+        Group {
+            switch asset.type {
+            case .titleDistance:
+                titleDistanceView
+            case .stats:
+                statsView
+            case .location:
+                locationView
+            case .route:
+                percentageRouteView
+            case .songList:
+                songListView
+            case .powerSong:
+                powerSongView
+            case .albumArt:
+                albumArtView
+            default:
+                EmptyView()
+            }
+        }
+        .scaleEffect(asset.scale, anchor: .center)
+        .rotationEffect(.degrees(asset.rotation), anchor: .center)
+        .position(
+            x: (asset.anchorPoint?.x ?? 0.5) * canvasSize.width + dragOffset.width,
+            y: (asset.anchorPoint?.y ?? 0.5) * canvasSize.height + dragOffset.height
+        )
+        .overlay(
+            Group {
+                if isSelected {
+                    // Simple selection indicator
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.blue, lineWidth: 2)
+                        .allowsHitTesting(false)
+                }
+            }
+        )
+        .onTapGesture {
+            onSelect()
+        }
+        .onTapGesture(count: 2) {
+            if let onEdit = onEdit {
+                onEdit(asset)
+            }
+        }
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    // Only allow dragging if element is already selected
+                    if isSelected && (gestureMode == .none || gestureMode == .dragging) {
+                        gestureMode = .dragging
+                        
+                        // Update visual position in real-time with drag offset
+                        dragOffset = value.translation
+                    }
+                }
+                .onEnded { value in
+                    print("🎯 DRAG ENDED: Asset \(asset.type.displayName), gestureMode: \(gestureMode), isSelected: \(isSelected)")
+                    print("🎯 DRAG ENDED: Translation: (\(value.translation.width), \(value.translation.height))")
+                    
+                    if gestureMode == .dragging && isSelected {
+                        // Apply final position and reset drag offset
+                        let oldX = asset.anchorPoint?.x ?? 0.5
+                        let oldY = asset.anchorPoint?.y ?? 0.5
+                        let newX = max(0.0, min(1.0, oldX + value.translation.width / canvasSize.width))
+                        let newY = max(0.0, min(1.0, oldY + value.translation.height / canvasSize.height))
+                        
+                        print("🎯 DRAG CALCULATION:")
+                        print("🎯   Canvas size: \(canvasSize)")
+                        print("🎯   Old anchor: (\(oldX), \(oldY))")
+                        print("🎯   Translation pixels: (\(value.translation.width), \(value.translation.height))")
+                        print("🎯   Translation percentage: (\(value.translation.width / canvasSize.width), \(value.translation.height / canvasSize.height))")
+                        print("🎯   New anchor (before clamp): (\(oldX + value.translation.width / canvasSize.width), \(oldY + value.translation.height / canvasSize.height))")
+                        print("🎯   New anchor (final): (\(newX), \(newY))")
+                        
+                        var updatedAsset = asset
+                        updatedAsset.anchorPoint = CGPoint(x: newX, y: newY)
+                        print("🎯 CALLING onUpdate with updated asset...")
+                        onUpdate(updatedAsset)
+                        print("🎯 onUpdate call completed")
+                        
+                        dragOffset = .zero
+                        gestureMode = .none
+                        print("🎯 Reset dragOffset and gestureMode")
+                    } else {
+                        print("🎯 DRAG IGNORED: gestureMode=\(gestureMode), isSelected=\(isSelected)")
+                        dragOffset = .zero
+                        gestureMode = .none
+                    }
+                }
+        )
+        .simultaneousGesture(
+            MagnificationGesture(minimumScaleDelta: 0.01)
+                .onChanged { value in
+                    // Only allow scaling if element is already selected
+                    if isSelected && (gestureMode == .none || gestureMode == .scaling) {
+                        gestureMode = .scaling
+                        
+                        // Update scale in real-time during magnification
+                        let newScale = max(0.3, min(3.0, asset.scale * value))
+                        var updatedAsset = asset
+                        updatedAsset.scale = newScale
+                        onUpdate(updatedAsset)
+                    }
+                }
+                .onEnded { value in
+                    if gestureMode == .scaling && isSelected {
+                        print("🔍 SCALE COMPLETE: Final scale \(asset.scale)")
+                        gestureMode = .none
+                    } else {
+                        gestureMode = .none
+                    }
+                }
+        )
+        .simultaneousGesture(
+            RotationGesture(minimumAngleDelta: .degrees(1))
+                .onChanged { value in
+                    // Only allow rotation if element is already selected
+                    if isSelected && (gestureMode == .none || gestureMode == .rotating) {
+                        gestureMode = .rotating
+                        
+                        // Update rotation in real-time during rotation
+                        let newRotation = (asset.rotation + value.degrees).truncatingRemainder(dividingBy: 360)
+                        var updatedAsset = asset
+                        updatedAsset.rotation = newRotation
+                        onUpdate(updatedAsset)
+                    }
+                }
+                .onEnded { value in
+                    if gestureMode == .rotating && isSelected {
+                        print("🔄 ROTATE COMPLETE: Final rotation \(asset.rotation)°")
+                        gestureMode = .none
+                    } else {
+                        gestureMode = .none
+                    }
+                }
+        )
+    }
+    
+    // Asset view implementations (same as AlignedAssetView)
+    private var titleDistanceView: some View {
+        VStack(spacing: 4) {
+            if case .titleDistance(let title, let distance, let unit) = asset.content {
+                Text("\(String(format: "%.2f", distance)) \(unit)")
+                    .font(.custom("Helvetica Neue", size: 32))
+                    .fontWeight(.bold)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.orange, .red],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                
+                Text(title.lowercased())
+                    .font(.custom("Helvetica Neue", size: 20))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.orange, .red],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(0.08))
+                .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
+        )
+    }
+    
+    private var statsView: some View {
+        HStack(spacing: 12) {
+            if case .stats(let stats) = asset.content {
+                Text(stats.date)
+                    .font(.custom("Helvetica Neue", size: 11))
+                    .fontWeight(.medium)
+                    .foregroundColor(.white.opacity(0.9))
+                
+                Text("•")
+                    .font(.custom("Helvetica Neue", size: 11))
+                    .foregroundColor(.white.opacity(0.5))
+                
+                Text(stats.time)
+                    .font(.custom("Helvetica Neue", size: 11))
+                    .fontWeight(.medium)
+                    .foregroundColor(.white.opacity(0.9))
+                
+                Text("•")
+                    .font(.custom("Helvetica Neue", size: 11))
+                    .foregroundColor(.white.opacity(0.5))
+                
+                Text(stats.pace)
+                    .font(.custom("Helvetica Neue", size: 11))
+                    .fontWeight(.medium)
+                    .foregroundColor(.green)
+                
+                if let weather = stats.weather {
+                    Text("•")
+                        .font(.custom("Helvetica Neue", size: 11))
+                        .foregroundColor(.white.opacity(0.5))
+                    
+                    Text(weather)
+                        .font(.custom("Helvetica Neue", size: 11))
+                        .fontWeight(.medium)
+                        .foregroundColor(.white.opacity(0.9))
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.black.opacity(0.5))
+                .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
+        )
+    }
+    
+    private var locationView: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "location")
+                .font(.system(size: 12))
+                .foregroundColor(asset.color)
+            Text(asset.content.displayText)
+                .font(.custom("Helvetica Neue", size: 12))
+                .fontWeight(.medium)
+                .foregroundColor(asset.color)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(0.08))
+                .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
+        )
+    }
+    
+    private var percentageRouteView: some View {
+        Group {
+            if case .route(let coordinates) = asset.content {
+                RoutePathView(
+                    coordinates: coordinates,
+                    songPositions: nil,
+                    lineWidth: 3.0,
+                    showSongIndicators: false,
+                    colorScheme: RunColorScheme.presets.first
+                )
+                .frame(width: 150, height: 150)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.black.opacity(0.05))
+                        .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
+                )
+            }
+        }
+    }
+    
+    private var songListView: some View {
+        Group {
+            if case .songList(let tracks, let powerSongId) = asset.content {
+                VStack(alignment: .leading, spacing: 4) { // Add spacing between lines
+                    ForEach(Array(tracks.enumerated()), id: \.offset) { index, track in
+                        let isPowerSong = track.id == powerSongId
+                        
+                        HStack(spacing: 12) {
+                            if isPowerSong {
+                                Text("🔥")
+                                    .font(.system(size: 16))
+                                    .frame(width: 24, alignment: .leading)
+                            } else {
+                                Text(romanNumeral(for: index + 1))
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.white)
+                                    .frame(width: 24, alignment: .leading)
+                            }
+                            
+                            Text("\(track.name.lowercased()) - \(track.artist.lowercased())")
+                                .font(.custom(asset.fontFamily ?? "Helvetica Neue", size: 14))
+                                .fontWeight(.medium)
+                                .foregroundColor(isPowerSong ? .orange : asset.color)
+                                .lineLimit(1)
+                                .padding(.horizontal, 12) // Padding inside the background
+                                .padding(.vertical, 6) // Vertical padding inside background
+                                .background(
+                                    // Background that fits the text content
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(Color.black.opacity(asset.showBlackOutline ? 0.8 : 0.4))
+                                )
+                        }
+                    }
+                }
+                .overlay(
+                    Group {
+                        if isSelected {
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.white.opacity(0.8), lineWidth: 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.white.opacity(0.1))
+                                )
+                        }
+                    }
+                )
+            }
+        }
+    }
+    
+    private var powerSongView: some View {
+        Group {
+            if case .powerSong(let track, let pace) = asset.content {
+                HStack(spacing: 8) {
+                    Text("🔥")
+                        .font(.system(size: asset.fontSize * 2.5))
+                    
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(track.name.lowercased())
+                            .font(.system(size: asset.fontSize * 1.2, weight: .bold))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                        
+                        Text(track.artist.lowercased())
+                            .font(.system(size: asset.fontSize, weight: .regular))
+                            .foregroundColor(.white.opacity(0.9))
+                            .lineLimit(1)
+                        
+                        if let pace = pace {
+                            HStack(spacing: 1) {
+                                Text(pace)
+                                    .font(.system(size: asset.fontSize * 1.1, weight: .medium))
+                                    .foregroundColor(.white)
+                                Text("per mile")
+                                    .font(.system(size: asset.fontSize * 0.8, weight: .regular))
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.orange.opacity(0.4),
+                                    Color.red.opacity(0.4)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(isSelected ? Color.blue : Color.white.opacity(0.2), lineWidth: isSelected ? 2 : 1)
+                        )
+                )
+                .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+            }
+        }
+    }
+    
+    private var albumArtView: some View {
+        Group {
+            if case .albumArt(let imageURL, let imageData, let albumName, let artistName) = asset.content {
+                Group {
+                    if let imageData = imageData, let uiImage = UIImage(data: imageData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .onAppear {
+                                print("🎨 ALBUM ART RENDER: ✅ Cached image displayed for '\(albumName)'")
+                            }
+                    } else if let imageURL = imageURL, let url = URL(string: imageURL) {
+                        CachedAsyncImage(url: url, albumName: albumName, artistName: artistName)
+                    } else {
+                        // Placeholder for album art
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.purple.opacity(0.6), Color.blue.opacity(0.4)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .overlay(
+                                VStack(spacing: 2) {
+                                    Image(systemName: "music.note")
+                                        .font(.system(size: 20))
+                                        .foregroundColor(.white.opacity(0.8))
+                                    
+                                    Text(albumName.prefix(12))
+                                        .font(.system(size: 8, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.7))
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.center)
+                                }
+                            )
+                    }
+                }
+                .frame(width: 100, height: 100)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
+                )
+            }
+        }
+    }
+    
+    private func romanNumeral(for number: Int) -> String {
+        let romanNumerals = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", 
+                           "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx"]
+        return number <= romanNumerals.count ? romanNumerals[number - 1] : "\(number)"
     }
 }
 
@@ -1964,443 +2737,6 @@ struct SimpleAddAssetMenu: View {
     }
 }
 
-struct SimpleAssetView: View {
-    let asset: CanvasAsset
-    let isSelected: Bool
-    let onSelect: () -> Void
-    let onUpdate: (CanvasAsset) -> Void
-    
-    @State private var dragOffset: CGSize = .zero
-    
-    var body: some View {
-        GeometryReader { geometry in
-            Group {
-                switch asset.type {
-                case .stats:
-                    HStack {
-                        Spacer()
-                        statsClusterView
-                    }
-                    .frame(width: geometry.size.width, alignment: .trailing)
-                    .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
-                case .location:
-                    HStack {
-                        Spacer()
-                        locationAssetView
-                    }
-                    .frame(width: geometry.size.width, alignment: .trailing)
-                    .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
-                case .titleDistance:
-                    titleDistanceAssetView
-                        .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
-                case .songList:
-                    HStack {
-                        songListAssetView
-                            .overlay(
-                                // Selection indicator for song list
-                                Group {
-                                    if isSelected {
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .stroke(Color.white.opacity(0.8), lineWidth: 2)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 8)
-                                                    .fill(Color.white.opacity(0.1))
-                                            )
-                                    }
-                                }
-                            )
-                        Spacer()
-                    }
-                    .frame(width: geometry.size.width, alignment: .leading)
-                    .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
-                case .powerSong:
-                    HStack {
-                        Spacer()
-                        powerSongAssetView
-                            .overlay(
-                                // Selection indicator for power song
-                                Group {
-                                    if isSelected {
-                                        RoundedRectangle(cornerRadius: 12)
-                                            .stroke(Color.white.opacity(0.8), lineWidth: 2)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 12)
-                                                    .fill(Color.white.opacity(0.1))
-                                            )
-                                    }
-                                }
-                            )
-                    }
-                    .frame(width: geometry.size.width, alignment: .trailing)
-                    .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
-                case .route:
-                    routeAssetView
-                        .overlay(
-                            // Selection indicator for route
-                            Group {
-                                if isSelected {
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.white.opacity(0.8), lineWidth: 2)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .fill(Color.white.opacity(0.05))
-                                        )
-                                }
-                            }
-                        )
-                        .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
-                case .albumArt:
-                    albumArtAssetView
-                        .overlay(
-                            // Selection indicator for album art
-                            Group {
-                                if isSelected {
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.white.opacity(0.8), lineWidth: 2)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .fill(Color.white.opacity(0.1))
-                                        )
-                                }
-                            }
-                        )
-                        .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
-                default:
-                    textAssetView
-                        .position(x: asset.position.x + dragOffset.width, y: asset.position.y + dragOffset.height)
-                }
-            }
-        }
-        .onTapGesture {
-            onSelect()
-        }
-        .gesture(
-            isSelected ? 
-            DragGesture(minimumDistance: 1)
-                .onChanged { value in
-                    dragOffset = value.translation
-                }
-                .onEnded { value in
-                    // Update the asset position - all assets use the same direct positioning
-                    var updatedAsset = asset
-                    updatedAsset.position.x += value.translation.width
-                    updatedAsset.position.y += value.translation.height
-                    
-                    onUpdate(updatedAsset)
-                    dragOffset = .zero
-                }
-            : nil
-        )
-    }
-    
-    private var textAssetView: some View {
-        Text(asset.content.displayText)
-            .font(.custom("Helvetica Neue", size: asset.fontSize))
-            .fontWeight(asset.fontWeight)
-            .foregroundColor(asset.color)
-            .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.white.opacity(0.1))
-                    .stroke(isSelected ? Color.white.opacity(0.8) : Color.clear, lineWidth: 2)
-            )
-    }
-    
-    private var titleDistanceAssetView: some View {
-        VStack(spacing: 4) {
-            if case .titleDistance(let title, let distance, let unit) = asset.content {
-                // Distance above title with gradient - more prominent
-                Text("\(String(format: "%.2f", distance)) \(unit)")
-                    .font(.custom("Helvetica Neue", size: 32))
-                    .fontWeight(.bold)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.orange, .red],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                
-                // Title below with same gradient - bigger than before
-                Text(title.lowercased())
-                    .font(.custom("Helvetica Neue", size: 20))
-                    .fontWeight(.semibold)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.orange, .red],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-            }
-        }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.white.opacity(0.08))
-                .stroke(isSelected ? Color.white.opacity(0.8) : Color.clear, lineWidth: 2)
-        )
-    }
-    
-    private var locationAssetView: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "location")
-                .font(.system(size: 12))
-                .foregroundColor(asset.color)
-            Text(asset.content.displayText)
-                .font(.custom("Helvetica Neue", size: 12))
-                .fontWeight(.medium)
-                .foregroundColor(asset.color)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.white.opacity(0.08))
-                .stroke(isSelected ? Color.white.opacity(0.8) : Color.clear, lineWidth: 2)
-        )
-    }
-    
-    private var statsClusterView: some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            if case .stats(let stats) = asset.content {
-                // Date, time, pace in horizontal line
-                HStack(spacing: 12) {
-                    // Date with calendar icon
-                    HStack(spacing: 4) {
-                        Image(systemName: "calendar")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                        Text(stats.date)
-                            .font(.custom("Helvetica Neue", size: 14))
-                            .fontWeight(.medium)
-                            .foregroundColor(.white)
-                    }
-                    
-                    // Time with clock icon
-                    HStack(spacing: 4) {
-                        Image(systemName: "clock")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                        Text(stats.time)
-                            .font(.custom("Helvetica Neue", size: 14))
-                            .fontWeight(.medium)
-                            .foregroundColor(.white)
-                    }
-                    
-                    // Pace with stopwatch icon
-                    HStack(spacing: 4) {
-                        Image(systemName: "stopwatch")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                        Text(stats.pace)
-                            .font(.custom("Helvetica Neue", size: 14))
-                            .fontWeight(.medium)
-                            .foregroundColor(.white)
-                    }
-                    
-                    // Weather with thermometer icon (if available)
-                    if let weather = stats.weather {
-                        HStack(spacing: 4) {
-                            Image(systemName: "thermometer")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                            Text(weather)
-                                .font(.custom("Helvetica Neue", size: 14))
-                                .fontWeight(.medium)
-                                .foregroundColor(.white)
-                        }
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.white.opacity(0.08))
-                .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
-        )
-    }
-    
-    private var songListAssetView: some View {
-        Group {
-            if case .songList(let tracks, let powerSongId) = asset.content {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(Array(tracks.enumerated()), id: \.offset) { index, track in
-                        let isPowerSong = track.id == powerSongId
-                        
-                        HStack(spacing: 12) {
-                            if isPowerSong {
-                                Text("🔥")
-                                    .font(.system(size: 16))
-                                    .frame(width: 24, alignment: .leading)
-                            } else {
-                                Text(romanNumeral(for: index + 1))
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundColor(.white)
-                                    .frame(width: 24, alignment: .leading)
-                            }
-                            
-                            Text("\(track.name.lowercased()) - \(track.artist.lowercased())")
-                                .font(.custom(asset.fontFamily ?? "Helvetica Neue", size: 14))
-                                .fontWeight(.medium)
-                                .foregroundColor(isPowerSong ? .orange : asset.color)
-                                .shadow(color: asset.showBlackOutline ? .black : .clear, radius: asset.showBlackOutline ? 1 : 0)
-                                .lineLimit(1)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(
-                            Rectangle()
-                                .fill(asset.showBlackOutline ? Color.black : Color.clear)
-                        )
-                    }
-                }
-            }
-        }
-    }
-    
-    private var powerSongAssetView: some View {
-        Group {
-            if case .powerSong(let track, let pace) = asset.content {
-                HStack(spacing: 10) {
-                    Text("🔥")
-                        .font(.system(size: 28))
-                    
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(track.name.lowercased())
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                        
-                        Text(track.artist.lowercased())
-                            .font(.system(size: 12, weight: .regular))
-                            .foregroundColor(.white.opacity(0.9))
-                            .lineLimit(1)
-                        
-                        if let pace = pace {
-                            HStack(spacing: 2) {
-                                Text(pace)
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundColor(.white)
-                                Text("per mile")
-                                    .font(.system(size: 10, weight: .regular))
-                                    .foregroundColor(.white.opacity(0.8))
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.orange.opacity(0.8), Color.red.opacity(0.6)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                )
-            }
-        }
-    }
-    
-    private var routeAssetView: some View {
-        Group {
-            if case .route(let coordinates) = asset.content {
-                RoutePathView(
-                    coordinates: coordinates,
-                    songPositions: [],
-                    lineWidth: 4.0,
-                    showSongIndicators: false,
-                    colorScheme: RunColorScheme.presets[0]
-                )
-                .frame(width: 250, height: 250)
-                .scaleEffect(asset.scale)
-                .contentShape(Rectangle()) // Make the route tappable
-            }
-        }
-    }
-    
-    private var albumArtAssetView: some View {
-        Group {
-            if case .albumArt(let imageURL, let imageData, let albumName, let artistName) = asset.content {
-                Group {
-                    if let imageData = imageData, let uiImage = UIImage(data: imageData) {
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    } else if let imageURL = imageURL, let url = URL(string: imageURL) {
-                        AsyncImage(url: url) { image in
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                        } placeholder: {
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [Color.purple.opacity(0.6), Color.blue.opacity(0.4)],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                                .overlay(
-                                    VStack(spacing: 2) {
-                                        Image(systemName: "music.note")
-                                            .font(.system(size: 20))
-                                            .foregroundColor(.white.opacity(0.8))
-                                        
-                                        Text(albumName.prefix(12))
-                                            .font(.system(size: 8, weight: .medium))
-                                            .foregroundColor(.white.opacity(0.7))
-                                            .lineLimit(2)
-                                            .multilineTextAlignment(.center)
-                                    }
-                                )
-                        }
-                    } else {
-                        // Placeholder for album art
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color.purple.opacity(0.6), Color.blue.opacity(0.4)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .overlay(
-                                VStack(spacing: 2) {
-                                    Image(systemName: "music.note")
-                                        .font(.system(size: 20))
-                                        .foregroundColor(.white.opacity(0.8))
-                                    
-                                    Text(albumName.prefix(12))
-                                        .font(.system(size: 8, weight: .medium))
-                                        .foregroundColor(.white.opacity(0.7))
-                                        .lineLimit(2)
-                                        .multilineTextAlignment(.center)
-                                }
-                            )
-                    }
-                }
-                .frame(width: 100, height: 100)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
-                .scaleEffect(asset.scale)
-            }
-        }
-    }
-    
-    private func romanNumeral(for number: Int) -> String {
-        let romanNumerals = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", 
-                           "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx"]
-        return number <= romanNumerals.count ? romanNumerals[number - 1] : "\(number)"
-    }
-}
 
 // MARK: - Song List Edit Sheet
 
@@ -2451,16 +2787,21 @@ struct SongListEditSheet: View {
                                 .font(.custom(selectedFont == "Helvetica Neue" ? "HelveticaNeue" : selectedFont, size: 14))
                                 .fontWeight(.medium)
                                 .foregroundColor(textColor)
-                                .shadow(color: showBlackOutline ? .black : .clear, radius: showBlackOutline ? 1 : 0)
                                 .lineLimit(1)
                             
                             Spacer()
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(showBlackOutline ? Color.black.opacity(0.8) : Color.clear)
+                        )
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
                         .background(
                             RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.black.opacity(0.8))
+                                .fill(Color.gray.opacity(0.1))
                         )
                     }
                 }
@@ -2489,8 +2830,8 @@ struct SongListEditSheet: View {
                                     .foregroundColor(.secondary)
                                     .disabled(selectedSongs.isEmpty)
                                     
-                                    Button("Select First 10") {
-                                        selectFirst10()
+                                    Button("Show All") {
+                                        showAllSongs()
                                     }
                                     .font(.subheadline)
                                     .foregroundColor(.blue)
@@ -2582,25 +2923,52 @@ struct SongListEditSheet: View {
                                     }
                                 }
                                 
-                                // Text color picker
-                                HStack {
+                                // Text color picker - replaced with preset colors to avoid ColorPicker crashes
+                                VStack(alignment: .leading, spacing: 8) {
                                     Text("Text Color")
                                         .font(.subheadline)
                                         .fontWeight(.medium)
                                         .foregroundColor(.secondary)
-                                    Spacer()
-                                    ColorPicker("", selection: $textColor)
-                                        .frame(width: 44, height: 32)
+                                    
+                                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 6), spacing: 8) {
+                                        let colors: [Color] = [.white, .black, .red, .orange, .yellow, .green, .blue, .purple, .pink, .cyan, .gray, .brown]
+                                        ForEach(Array(colors.enumerated()), id: \.offset) { index, color in
+                                            Button {
+                                                textColor = color
+                                            } label: {
+                                                Circle()
+                                                    .fill(color)
+                                                    .frame(width: 32, height: 32)
+                                                    .overlay(
+                                                        Circle()
+                                                            .stroke(textColor == color ? Color.blue : Color.gray.opacity(0.3), lineWidth: textColor == color ? 3 : 1)
+                                                    )
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
                                 }
                                 
-                                // Black outline toggle
+                                // Black outline toggle - simplified to prevent freezing
                                 HStack {
                                     Text("Text Shadow")
                                         .font(.subheadline)
                                         .fontWeight(.medium)
                                         .foregroundColor(.secondary)
                                     Spacer()
-                                    Toggle("", isOn: $showBlackOutline)
+                                    
+                                    Button {
+                                        showBlackOutline.toggle()
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: showBlackOutline ? "checkmark.circle.fill" : "circle")
+                                                .foregroundColor(showBlackOutline ? .blue : .gray)
+                                            Text(showBlackOutline ? "Enabled" : "Disabled")
+                                                .font(.subheadline)
+                                                .foregroundColor(showBlackOutline ? .blue : .gray)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
                                 }
                             }
                         }
@@ -2638,14 +3006,14 @@ struct SongListEditSheet: View {
         if case .songList(let tracks, _) = asset.content {
             selectedSongs = Set(tracks.map { $0.id })
         } else if let allTracks = run.spotifyTracks {
-            // If no specific selection, select first few songs up to maxSongs
-            selectedSongs = Set(allTracks.prefix(min(maxSongs, allTracks.count)).map { $0.id })
+            // Default to first 10 songs
+            selectedSongs = Set(allTracks.prefix(10).map { $0.id })
         }
         
         // Initialize styling from current asset
         textColor = asset.color
         selectedFont = asset.fontFamily ?? "Helvetica Neue"
-        showBlackOutline = asset.showBlackOutline
+        showBlackOutline = asset.showBlackOutline || true // Default to enabled
     }
     
     private func toggleSongSelection(_ songId: String) {
@@ -2656,9 +3024,9 @@ struct SongListEditSheet: View {
         }
     }
     
-    private func selectFirst10() {
+    private func showAllSongs() {
         guard let allTracks = run.spotifyTracks else { return }
-        selectedSongs = Set(allTracks.prefix(10).map { $0.id })
+        selectedSongs = Set(allTracks.map { $0.id })
     }
     
     private func saveChanges() {
@@ -2678,6 +3046,864 @@ struct SongListEditSheet: View {
         
         onSave(updatedAsset)
         dismiss()
+    }
+}
+
+// MARK: - Edge-Based Alignment Asset View (SwiftUI Alignment System)
+
+struct AlignmentBasedAssetView: View {
+    let asset: CanvasAsset
+    let isSelected: Bool
+    let canvasSize: CGSize
+    let alignment: CanvasAlignment
+    let onSelect: () -> Void
+    let onUpdate: (CanvasAsset) -> Void
+    var onEdit: ((CanvasAsset) -> Void)? = nil
+    
+    // Gesture state for interactions
+    @State private var dragOffset: CGSize = .zero
+    @State private var currentScale: CGFloat = 1.0
+    @State private var currentRotation: Double = 0.0
+    @State private var gestureMode: GestureMode = .none
+    
+    enum GestureMode {
+        case none, dragging, scaling, rotating
+    }
+    
+    // Calculate vertical spacing offset to prevent overlapping
+    private var verticalSpacingOffset: CGPoint {
+        switch asset.type {
+        case .titleDistance:
+            return CGPoint(x: 0, y: -220) // Move title much higher up
+        case .stats:
+            return CGPoint(x: 0, y: 0) // Stats at top-right (base position)
+        case .location:
+            return CGPoint(x: 0, y: 40) // Location below stats
+        case .route:
+            return CGPoint(x: 0, y: -80) // Move route map higher up from center
+        case .songList:
+            return CGPoint(x: 0, y: 200) // Song list lower on left
+        case .powerSong:
+            return CGPoint(x: 0, y: 0) // Power song at bottom-right (base position)
+        default:
+            return CGPoint(x: 0, y: 0)
+        }
+    }
+    
+    var body: some View {
+        ZStack {
+            // Use overlay with proper SwiftUI alignment
+            Rectangle()
+                .fill(Color.clear)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: alignment.swiftUIAlignment) {
+                    assetContentView
+                        .scaleEffect(asset.scale * currentScale, anchor: .center)
+                        .rotationEffect(.degrees(asset.rotation + currentRotation), anchor: .center)
+                        .offset(x: dragOffset.width + verticalSpacingOffset.x, 
+                               y: dragOffset.height + verticalSpacingOffset.y)
+                        .onTapGesture {
+                            onSelect()
+                        }
+                        .onTapGesture(count: 2) {
+                            if let onEdit = onEdit {
+                                onEdit(asset)
+                            }
+                        }
+                        .highPriorityGesture(
+                            DragGesture(minimumDistance: 1)
+                                .onChanged { value in
+                                    // Only allow dragging if element is already selected
+                                    if isSelected && (gestureMode == .none || gestureMode == .dragging) {
+                                        gestureMode = .dragging
+                                        
+                                        // Update visual position in real-time with drag offset
+                                        dragOffset = value.translation
+                                    }
+                                }
+                                .onEnded { value in
+                                    if gestureMode == .dragging && isSelected {
+                                        // Apply final position and reset drag offset
+                                        let alignmentCenter = alignment.swiftUIAlignment.asCGPoint(in: canvasSize)
+                                        let currentX = (alignmentCenter.x + verticalSpacingOffset.x) / canvasSize.width
+                                        let currentY = (alignmentCenter.y + verticalSpacingOffset.y) / canvasSize.height
+                                        
+                                        let newX = max(0.0, min(1.0, currentX + value.translation.width / canvasSize.width))
+                                        let newY = max(0.0, min(1.0, currentY + value.translation.height / canvasSize.height))
+                                        
+                                        var updatedAsset = asset
+                                        updatedAsset.anchorPoint = CGPoint(x: newX, y: newY)
+                                        updatedAsset.alignment = nil // Switch to percentage positioning
+                                        print("🎯 ALIGNMENT DRAG: Updating asset \(asset.type.displayName) to position (\(newX), \(newY))")
+                                        onUpdate(updatedAsset)
+                                        print("🎯 ALIGNMENT DRAG: Called onUpdate with new position")
+                                        
+                                        dragOffset = .zero
+                                        gestureMode = .none
+                                        print("🎯 ALIGNMENT DRAG: Reset drag offset and gesture mode")
+                                    } else {
+                                        dragOffset = .zero
+                                        gestureMode = .none
+                                    }
+                                }
+                        )
+                        .simultaneousGesture(
+                            MagnificationGesture(minimumScaleDelta: 0.01)
+                                .onChanged { value in
+                                    // Only allow scaling if element is already selected
+                                    if isSelected && (gestureMode == .none || gestureMode == .scaling) {
+                                        gestureMode = .scaling
+                                        currentScale = value
+                                    }
+                                }
+                                .onEnded { value in
+                                    if gestureMode == .scaling && isSelected {
+                                        var updatedAsset = asset
+                                        updatedAsset.scale = max(0.3, min(3.0, asset.scale * value))
+                                        onUpdate(updatedAsset)
+                                        
+                                        // Delayed reset to prevent snap-back visual effect
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                            currentScale = 1.0
+                                            gestureMode = .none
+                                        }
+                                        
+                                        print("🔍 ALIGNMENT SCALE COMPLETE: Updated \(asset.type) scale to \(updatedAsset.scale)")
+                                    } else {
+                                        currentScale = 1.0
+                                        gestureMode = .none
+                                    }
+                                }
+                        )
+                        .simultaneousGesture(
+                            RotationGesture(minimumAngleDelta: .degrees(1))
+                                .onChanged { value in
+                                    // Only allow rotation if element is already selected
+                                    if isSelected && (gestureMode == .none || gestureMode == .rotating) {
+                                        gestureMode = .rotating
+                                        currentRotation = value.degrees
+                                    }
+                                }
+                                .onEnded { value in
+                                    if gestureMode == .rotating && isSelected {
+                                        var updatedAsset = asset
+                                        updatedAsset.rotation = (asset.rotation + value.degrees).truncatingRemainder(dividingBy: 360)
+                                        onUpdate(updatedAsset)
+                                        
+                                        // Delayed reset to prevent snap-back visual effect
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                            currentRotation = 0
+                                            gestureMode = .none
+                                        }
+                                        
+                                        print("🔄 ALIGNMENT ROTATE COMPLETE: Updated \(asset.type) rotation to \(updatedAsset.rotation)°")
+                                    } else {
+                                        currentRotation = 0
+                                        gestureMode = .none
+                                    }
+                                }
+                        )
+                        .padding(.all, 20) // Padding from edges
+                }
+        }
+    }
+    
+    @ViewBuilder
+    private var assetContentView: some View {
+        Group {
+            switch asset.type {
+            case .titleDistance:
+                titleDistanceView
+            case .stats:
+                statsView
+            case .location:
+                locationView
+            case .route:
+                alignmentRouteView
+            case .songList:
+                songListView
+            case .powerSong:
+                powerSongView
+            default:
+                EmptyView()
+            }
+        }
+        .overlay(
+            Group {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.blue.opacity(0.8), lineWidth: 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.blue.opacity(0.1))
+                        )
+                }
+            }
+        )
+    }
+    
+    // Asset view implementations (reuse from PercentagePositionedAssetView)
+    private var titleDistanceView: some View {
+        VStack(spacing: 4) {
+            if case .titleDistance(let title, let distance, let unit) = asset.content {
+                Text("\(String(format: "%.2f", distance)) \(unit)")
+                    .font(.custom("Helvetica Neue", size: 32))
+                    .fontWeight(.bold)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.orange, .red],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                
+                Text(title.lowercased())
+                    .font(.custom("Helvetica Neue", size: 20))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.orange, .red],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(0.08))
+        )
+    }
+    
+    private var statsView: some View {
+        HStack(spacing: 12) {
+            if case .stats(let stats) = asset.content {
+                Text(stats.date)
+                    .font(.custom("Helvetica Neue", size: 11))
+                    .fontWeight(.medium)
+                    .foregroundColor(.white.opacity(0.9))
+                
+                Text("•")
+                    .font(.custom("Helvetica Neue", size: 11))
+                    .foregroundColor(.white.opacity(0.5))
+                
+                Text(stats.time)
+                    .font(.custom("Helvetica Neue", size: 11))
+                    .fontWeight(.medium)
+                    .foregroundColor(.white.opacity(0.9))
+                
+                Text("•")
+                    .font(.custom("Helvetica Neue", size: 11))
+                    .foregroundColor(.white.opacity(0.5))
+                
+                Text(stats.pace)
+                    .font(.custom("Helvetica Neue", size: 11))
+                    .fontWeight(.medium)
+                    .foregroundColor(.green)
+                
+                if let weather = stats.weather {
+                    Text("•")
+                        .font(.custom("Helvetica Neue", size: 11))
+                        .foregroundColor(.white.opacity(0.5))
+                    
+                    Text(weather)
+                        .font(.custom("Helvetica Neue", size: 11))
+                        .fontWeight(.medium)
+                        .foregroundColor(.orange)
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.black.opacity(0.4))
+        )
+    }
+    
+    private var locationView: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "location")
+                .font(.system(size: 12))
+                .foregroundColor(asset.color)
+            Text(asset.content.displayText)
+                .font(.custom("Helvetica Neue", size: 12))
+                .fontWeight(.medium)
+                .foregroundColor(asset.color)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(0.08))
+        )
+    }
+    
+    private var alignmentRouteView: some View {
+        Group {
+            if case .route(let coordinates) = asset.content {
+                RoutePathView(
+                    coordinates: coordinates,
+                    songPositions: nil,
+                    lineWidth: 3.0,
+                    showSongIndicators: false,
+                    colorScheme: RunColorScheme.presets.first
+                )
+                .frame(width: 150, height: 150)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.black.opacity(0.05))
+                )
+            }
+        }
+    }
+    
+    private var songListView: some View {
+        Group {
+            if case .songList(let tracks, let powerSongId) = asset.content {
+                VStack(alignment: .leading, spacing: 4) { // Add spacing between lines
+                    ForEach(Array(tracks.enumerated()), id: \.offset) { index, track in
+                        let isPowerSong = track.id == powerSongId
+                        
+                        HStack(spacing: 12) {
+                            if isPowerSong {
+                                Text("🔥")
+                                    .font(.system(size: 16))
+                                    .frame(width: 24, alignment: .leading)
+                            } else {
+                                Text(romanNumeral(for: index + 1))
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.white)
+                                    .frame(width: 24, alignment: .leading)
+                            }
+                            
+                            Text("\(track.name.lowercased()) - \(track.artist.lowercased())")
+                                .font(.custom(asset.fontFamily ?? "Helvetica Neue", size: 14))
+                                .fontWeight(.medium)
+                                .foregroundColor(isPowerSong ? .orange : asset.color)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, 8) // Reduced padding for content-fitting background
+                        .padding(.vertical, 4) // Reduced vertical padding
+                        .background(
+                            // Background that fits the content only
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.black.opacity(asset.showBlackOutline ? 0.8 : 0.4))
+                        )
+                    }
+                }
+            }
+        }
+    }
+    
+    private var powerSongView: some View {
+        Group {
+            if case .powerSong(let track, let pace) = asset.content {
+                HStack(spacing: 8) {
+                    Text("🔥")
+                        .font(.system(size: asset.fontSize * 2.5))
+                    
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(track.name.lowercased())
+                            .font(.system(size: asset.fontSize * 1.2, weight: .bold))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                        
+                        Text(track.artist.lowercased())
+                            .font(.system(size: asset.fontSize, weight: .regular))
+                            .foregroundColor(.white.opacity(0.9))
+                            .lineLimit(1)
+                        
+                        if let pace = pace {
+                            HStack(spacing: 1) {
+                                Text(pace)
+                                    .font(.system(size: asset.fontSize * 1.1, weight: .medium))
+                                    .foregroundColor(.white)
+                                Text("per mile")
+                                    .font(.system(size: asset.fontSize * 0.8, weight: .regular))
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.orange.opacity(0.4),
+                                    Color.red.opacity(0.4)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+                )
+                .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+            }
+        }
+    }
+    
+    private var finalRouteView: some View {
+        Group {
+            if case .route(let coordinates) = asset.content {
+                RoutePathView(
+                    coordinates: coordinates,
+                    songPositions: nil,
+                    lineWidth: 3.0,
+                    showSongIndicators: false,
+                    colorScheme: RunColorScheme.presets.first
+                )
+                .frame(width: 150, height: 150) // Made map bigger
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.white.opacity(0.05))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.white.opacity(0.3), lineWidth: 2) // Added bigger outline
+                        )
+                )
+            }
+        }
+    }
+    
+    private func romanNumeral(for number: Int) -> String {
+        let romanNumerals = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", 
+                           "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx"]
+        return number <= romanNumerals.count ? romanNumerals[number - 1] : "\(number)"
+    }
+}
+
+// MARK: - Cached Async Image for Album Art
+
+struct CachedAsyncImage: View {
+    let url: URL
+    let albumName: String
+    let artistName: String
+    
+    @State private var cachedImageData: Data?
+    @State private var isLoading = false
+    
+    var body: some View {
+        Group {
+            if let cachedImageData = cachedImageData,
+               let uiImage = UIImage(data: cachedImageData) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .onAppear {
+                        print("🎨 CACHED: ✅ Instant load for '\(albumName)'")
+                    }
+            } else {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .onAppear {
+                                print("🎨 CACHED: ✅ Downloaded '\(albumName)', saving to cache")
+                                Task {
+                                    await saveImageToCache()
+                                }
+                            }
+                    case .failure(_):
+                        albumArtPlaceholder
+                    case .empty:
+                        albumArtPlaceholder
+                    @unknown default:
+                        albumArtPlaceholder
+                    }
+                }
+            }
+        }
+        .onAppear {
+            Task {
+                await loadCachedImage()
+            }
+        }
+    }
+    
+    private var albumArtPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(
+                LinearGradient(
+                    colors: [Color.purple.opacity(0.6), Color.blue.opacity(0.4)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(
+                VStack(spacing: 2) {
+                    Image(systemName: "music.note")
+                        .font(.system(size: 20))
+                        .foregroundColor(.white.opacity(0.8))
+                    
+                    Text(albumName.prefix(12))
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundColor(.white.opacity(0.7))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                }
+            )
+    }
+    
+    private func loadCachedImage() async {
+        let cacheKey = "\(albumName)_\(artistName)".lowercased().replacingOccurrences(of: " ", with: "_")
+        
+        do {
+            if let imageData = try await FirestoreService.shared.getCachedAlbumArt(cacheKey: cacheKey) {
+                await MainActor.run {
+                    self.cachedImageData = imageData
+                    print("🎨 CACHED: ✅ Loaded from Firebase cache for '\(albumName)'")
+                }
+            }
+        } catch {
+            print("🎨 CACHED: No cache found for '\(albumName)', will download")
+        }
+    }
+    
+    private func saveImageToCache() async {
+        let cacheKey = "\(albumName)_\(artistName)".lowercased().replacingOccurrences(of: " ", with: "_")
+        
+        do {
+            let (imageData, _) = try await URLSession.shared.data(from: url)
+            try await FirestoreService.shared.cacheAlbumArt(cacheKey: cacheKey, imageData: imageData)
+            
+            await MainActor.run {
+                self.cachedImageData = imageData
+                print("🎨 CACHED: ✅ Saved '\(albumName)' to Firebase cache")
+            }
+        } catch {
+            print("🎨 CACHED: ❌ Failed to cache '\(albumName)': \(error)")
+        }
+    }
+}
+
+// MARK: - RunStackCardView for Card Stack Display
+
+struct RunStackCardView: View {
+    let run: RunActivity
+    @State private var photoBackground: RunPhotoBackground?
+    @State private var isLoadingPhoto = false
+    
+    var body: some View {
+        ZStack {
+            // Background layer - SOLID photo or smart gradient (no transparency)
+            Group {
+                // First try the custom photo background we loaded
+                if let photoBackground = photoBackground {
+                    PhotoBackgroundView(photoBackground: photoBackground)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                }
+                // Then try the run's stored background photo
+                else if let runPhotoBackground = run.backgroundPhoto,
+                        runPhotoBackground.photoData != nil {
+                    PhotoBackgroundView(photoBackground: runPhotoBackground)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                } 
+                // Fallback to smart gradients with variety
+                else {
+                    smartFallbackGradient(for: run)
+                }
+            }
+            
+            // SOLID dark overlay for text readability (prevents card bleed-through)
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.7),
+                    Color.black.opacity(0.85),
+                    Color.black.opacity(1.0)  // Completely opaque at bottom
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            
+            // Route display - positioned ABOVE dark overlay for visibility
+            VStack {
+                Spacer()
+                RoutePathView(
+                    coordinates: run.routeCoordinates,
+                    lineWidth: 8.0,  // Reduced thickness for cleaner look
+                    colorScheme: run.weatherBasedRouteColor ?? run.colorScheme ?? RunColorScheme.presets[0]
+                )
+                .opacity(0.95)  // High opacity for prominence
+                .frame(width: 300, height: 220)  // Large size
+                .clipped()
+                Spacer().frame(height: 80)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            
+            // Content layout optimized for card stacking
+            VStack(spacing: 0) {
+                // TOP SECTION - Full width title and location
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(run.name.lowercased())
+                        .font(.custom("Helvetica Neue", size: 26))
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                        .shadow(color: .black.opacity(0.8), radius: 3, x: 1, y: 1)
+                        .lineLimit(2)  // Optimized for 2-line titles
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true) // Allow vertical expansion
+                        .frame(maxWidth: .infinity, alignment: .leading) // Full width
+                    
+                    // Location display - full width
+                    if let locationText = run.smartLocationDisplay {
+                        HStack(spacing: 6) {
+                            Image(systemName: "location.fill")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.8))
+                            Text(locationText.lowercased())
+                                .font(.custom("Helvetica Neue", size: 14))
+                                .foregroundColor(.white.opacity(0.8))
+                                .lineLimit(2)  // Allow location to wrap instead of truncating
+                        }
+                        .shadow(color: .black.opacity(0.8), radius: 2)
+                        .frame(maxWidth: .infinity, alignment: .leading) // Full width
+                    }
+                    
+                    // Power song - right-aligned with compact background
+                    if let powerSong = run.powerSong {
+                        HStack {
+                            Spacer() // Push power song to the right
+                            
+                            HStack(spacing: 6) {
+                                Text("🔥")
+                                    .font(.system(size: 14))
+                                
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(powerSong.name.lowercased())
+                                        .font(.custom("Helvetica Neue", size: 12))
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.white)
+                                        .lineLimit(1)
+                                    
+                                    // Add pace if available
+                                    if let pace = run.powerSongPacePerMile {
+                                        Text(pace + "/mi")
+                                            .font(.custom("Helvetica Neue", size: 10))
+                                            .fontWeight(.medium)
+                                            .foregroundColor(.orange)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.black.opacity(0.5))
+                            .cornerRadius(12)
+                            .shadow(color: .black.opacity(0.3), radius: 2)
+                        }
+                        .padding(.top, 6) // Space from location
+                    }
+                }
+                
+                Spacer()
+                
+                // MIDDLE SECTION - Space for route visibility
+                Spacer().frame(height: 180)
+                
+                // MAIN DISTANCE - Large and prominent
+                VStack(spacing: 4) {
+                    Text(formatDistance(run.distance))
+                        .font(.custom("Helvetica Neue", size: 42))
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                        .shadow(color: .black.opacity(0.8), radius: 3, x: 1, y: 1)
+                    
+                    Text(distanceUnitAbbreviation().lowercased())
+                        .font(.custom("Helvetica Neue", size: 18))
+                        .foregroundColor(.white.opacity(0.8))
+                        .shadow(color: .black.opacity(0.8), radius: 2)
+                }
+                
+                Spacer().frame(height: 20)
+                
+                // BOTTOM ESSENTIAL DATA STRIP - Visible when cards are stacked
+                VStack(spacing: 8) {
+                    // First row: Date (with day) and Time
+                    HStack {
+                        Text(formatDateWithDayForDisplay(run.date))
+                            .font(.custom("Helvetica Neue", size: 11))
+                            .fontWeight(.medium)
+                            .foregroundColor(.white.opacity(0.9))
+                        
+                        Spacer()
+                        
+                        Text(run.compactFormattedDuration)
+                            .font(.custom("Helvetica Neue", size: 11))
+                            .fontWeight(.medium)
+                            .foregroundColor(.white.opacity(0.9))
+                    }
+                    
+                    // Second row: Distance, Pace, Weather
+                    HStack {
+                        Text("\(formatDistance(run.distance)) \(distanceUnitAbbreviation().lowercased())")
+                            .font(.custom("Helvetica Neue", size: 11))
+                            .fontWeight(.medium)
+                            .foregroundColor(.white.opacity(0.9))
+                        
+                        Spacer()
+                        
+                        Text(UserPreferences.shared.formatPace(run.averagePace) + "/\(UserPreferences.shared.distanceUnit == .miles ? "mi" : "km")")
+                            .font(.custom("Helvetica Neue", size: 11))
+                            .foregroundColor(.white.opacity(0.8))
+                        
+                        Spacer()
+                        
+                        if let weather = run.weatherData {
+                            HStack(spacing: 3) {
+                                Text(weather.condition.emoji)
+                                    .font(.system(size: 11))
+                                Text("\(Int(weather.temperature))°F")
+                                    .font(.custom("Helvetica Neue", size: 11))
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.black.opacity(1.0))  // COMPLETELY SOLID background for data strip
+                .cornerRadius(8)
+                .shadow(color: .black.opacity(0.3), radius: 2)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 28) // Increased vertical padding for top/bottom spacing
+        }
+        .frame(height: 520) // Further increased height to prevent all text cutoff
+        .contentShape(Rectangle())
+        .cornerRadius(20)
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+        .onAppear {
+            loadPhotoBackgroundIfNeeded()
+        }
+    }
+    
+    // MARK: - Helper Functions
+    
+    private func loadPhotoBackgroundIfNeeded() {
+        // Only load if we don't already have a background and aren't currently loading
+        guard photoBackground == nil && !isLoadingPhoto else { return }
+        
+        // Skip if run already has a background photo
+        guard run.backgroundPhoto == nil else { return }
+        
+        Task {
+            await MainActor.run {
+                isLoadingPhoto = true
+            }
+            
+            // Use PhotoService to fetch photos from run timeframe
+            let photos = await PhotoService.shared.fetchPhotosForRun(date: run.date, duration: run.elapsedTime)
+            
+            // If photos found, create a photo background with lighter filtering
+            if !photos.isEmpty {
+                if let selectedPhotoBackground = await PhotoService.shared.selectRandomPhoto(from: photos, filterType: .softFocus) {
+                    await MainActor.run {
+                        self.photoBackground = selectedPhotoBackground
+                        self.isLoadingPhoto = false
+                    }
+                    return
+                }
+            }
+            
+            await MainActor.run {
+                isLoadingPhoto = false
+            }
+        }
+    }
+    
+    private func formatDateWithDayForDisplay(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "E MMM d"
+        return formatter.string(from: date).lowercased()
+    }
+    
+    private func formatDistance(_ meters: Double) -> String {
+        let userPrefs = UserPreferences.shared
+        switch userPrefs.distanceUnit {
+        case .miles:
+            let miles = meters / 1609.34
+            return String(format: "%.2f", miles)
+        case .kilometers:
+            let km = meters / 1000.0
+            return String(format: "%.2f", km)
+        }
+    }
+    
+    private func distanceUnitAbbreviation() -> String {
+        return UserPreferences.shared.distanceUnit.abbreviation.lowercased()
+    }
+    
+    private func smartFallbackGradient(for run: RunActivity) -> LinearGradient {
+        // Weather and time-based gradient variations for visual diversity
+        let weatherGradients: [WeatherData.WeatherCondition: [Color]] = [
+            .clear: [Color.orange, Color.yellow.opacity(0.8), Color.red.opacity(0.6)],
+            .cloudy: [Color.gray, Color.blue.opacity(0.6), Color.purple.opacity(0.4)],
+            .rain: [Color.blue, Color.indigo.opacity(0.8), Color.purple.opacity(0.6)],
+            .snow: [Color.blue, Color.white.opacity(0.8), Color.cyan.opacity(0.6)],
+            .fog: [Color.gray, Color.mint.opacity(0.6), Color.blue.opacity(0.4)],
+            .thunderstorm: [Color.purple, Color.indigo.opacity(0.8), Color.black.opacity(0.6)]
+        ]
+        
+        let timeOfDayGradients: [WeatherData.TimeOfDay: [Color]] = [
+            .dawn: [Color.orange, Color.pink.opacity(0.8), Color.yellow.opacity(0.6)],
+            .morning: [Color.blue, Color.cyan.opacity(0.8), Color.mint.opacity(0.6)],
+            .afternoon: [Color.yellow, Color.orange.opacity(0.8), Color.red.opacity(0.6)],
+            .evening: [Color.purple, Color.pink.opacity(0.8), Color.orange.opacity(0.6)],
+            .night: [Color.indigo, Color.purple.opacity(0.8), Color.black.opacity(0.6)]
+        ]
+        
+        // Prefer weather-based gradients, fallback to time of day
+        if let weather = run.weatherData {
+            if let weatherColors = weatherGradients[weather.condition] {
+                return LinearGradient(
+                    colors: weatherColors,
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            } else if let timeColors = timeOfDayGradients[weather.timeOfDay] {
+                return LinearGradient(
+                    colors: timeColors,
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+        }
+        
+        // Final fallback: diverse gradients based on run ID for consistency
+        let fallbackGradients: [[Color]] = [
+            [Color.blue, Color.cyan.opacity(0.8), Color.teal.opacity(0.6)],
+            [Color.purple, Color.pink.opacity(0.8), Color.indigo.opacity(0.6)],
+            [Color.green, Color.mint.opacity(0.8), Color.teal.opacity(0.6)],
+            [Color.orange, Color.yellow.opacity(0.8), Color.red.opacity(0.6)],
+            [Color.red, Color.pink.opacity(0.8), Color.orange.opacity(0.6)]
+        ]
+        
+        let gradientIndex = abs(run.id.hashValue) % fallbackGradients.count
+        let selectedGradient = fallbackGradients[gradientIndex]
+        
+        return LinearGradient(
+            colors: selectedGradient,
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
 }
 

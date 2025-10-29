@@ -301,7 +301,10 @@ class FirestoreService {
                   let trackName = data["trackName"] as? String,
                   let artistName = data["artistName"] as? String,
                   let playedAtTimestamp = data["playedAt"] as? Timestamp else {
-                print("❌ Invalid track data in document \(document.documentID)")
+                // Only log occasional invalid documents to avoid spam
+                if Int.random(in: 1...100) == 1 {
+                    print("❌ Invalid track data found (1 of ~100 shown) - document ID: \(document.documentID)")
+                }
                 return nil
             }
             
@@ -323,59 +326,115 @@ class FirestoreService {
     // MARK: - Optimized Date-Range Queries
     
     func getImportedSpotifyTracksForDateRange(userId: String, startDate: Date, endDate: Date) async throws -> [SpotifyTrack] {
-        print("☁️ UNIFIED: Fetching tracks for date range: \(startDate) to \(endDate) from global collection")
+        // PERFORMANCE OPTIMIZATION: Minimal logging and direct query approach
         
-        // First check if there's any data for this user at all
-        let userDataCheck = try await db.collection("spotifyListeningHistory")
+        // Simple, efficient query with date range filter
+        let snapshot = try await db.collection("spotifyListeningHistory")
             .whereField("userId", isEqualTo: userId)
-            .limit(to: 5)
+            .whereField("playedAt", isGreaterThanOrEqualTo: Timestamp(date: startDate))
+            .whereField("playedAt", isLessThanOrEqualTo: Timestamp(date: endDate))
+            .order(by: "playedAt", descending: false)
             .getDocuments()
-        print("🔍 DEBUG: User \(userId) has \(userDataCheck.documents.count) total documents in unified collection")
         
-        // Show a sample of what's available
-        if !userDataCheck.documents.isEmpty {
-            let sampleDoc = userDataCheck.documents.first!
-            let sampleData = sampleDoc.data()
-            if let playedAt = sampleData["playedAt"] as? Timestamp {
-                print("🔍 DEBUG: Sample track date: \(playedAt.dateValue())")
+        var validTracks: [SpotifyTrack] = []
+        var invalidCount = 0
+        
+        for document in snapshot.documents {
+            let data = document.data()
+            
+            guard let trackId = data["trackId"] as? String,
+                  let trackName = data["trackName"] as? String,
+                  let artistName = data["artistName"] as? String,
+                  let playedAtTimestamp = data["playedAt"] as? Timestamp else {
+                invalidCount += 1
+                continue // Skip invalid records silently
             }
+            
+            let track = SpotifyTrack(
+                id: trackId,
+                name: trackName,
+                artist: artistName,
+                album: data["albumName"] as? String,
+                playedAt: playedAtTimestamp.dateValue(),
+                durationMs: data["durationMs"] as? Int ?? 0,
+                albumImageURL: data["albumArtURL"] as? String
+            )
+            validTracks.append(track)
         }
         
-        // Check if we need to restore legacy data (only if unified collection is suspiciously small)
-        if userDataCheck.documents.count < 50 {
-            print("⚠️ DEBUG: Unified collection has suspiciously few tracks (\(userDataCheck.documents.count))")
-            print("🔍 DEBUG: Checking if legacy data needs restoration...")
-            
+        // Only log summary if there are issues
+        if invalidCount > 0 {
+            print("⚠️ FIRESTORE: Skipped \(invalidCount) invalid tracks out of \(snapshot.documents.count) total")
+        }
+        
+        print("☁️ Retrieved \(validTracks.count) valid tracks for date range")
+        return validTracks
+    }
+    
+    // MARK: - Legacy restoration function (call once on first app launch)
+    func performLegacyRestorationIfNeeded(userId: String) async throws {
+        // Check if restoration already happened
+        let restoreMarkerCheck = try await db.collection("spotifyListeningHistory")
+            .whereField("userId", isEqualTo: userId)
+            .whereField("source", isEqualTo: "legacy_restore")
+            .limit(to: 1)
+            .getDocuments()
+        
+        if !restoreMarkerCheck.documents.isEmpty {
+            return // Already restored
+        }
+        
+        // Check total tracks in unified collection
+        let totalCountQuery = try await db.collection("spotifyListeningHistory")
+            .whereField("userId", isEqualTo: userId)
+            .count
+            .getAggregation(source: .server)
+        let totalCount = Int(totalCountQuery.count)
+        
+        // Only restore if unified collection is suspiciously small
+        if totalCount < 50 {
             let legacyCheck = try await db.collection("users").document(userId)
                 .collection("importedSpotifyTracks")
                 .limit(to: 5)
                 .getDocuments()
             
             if legacyCheck.documents.count > 0 {
-                print("🚀 DEBUG: Found \(legacyCheck.documents.count) legacy tracks available for restoration")
+                print("🚀 AUTO-RESTORE: Starting legacy tracks restoration...")
+                try await self.restoreLegacyTracksToUnifiedCollection(userId: userId)
+                print("✅ AUTO-RESTORE: Successfully restored legacy tracks")
+            }
+        }
+    }
+    
+    // MARK: - Original function with all debug info (for manual troubleshooting)
+    func getImportedSpotifyTracksForDateRangeWithDebug(userId: String, startDate: Date, endDate: Date) async throws -> [SpotifyTrack] {
+        print("☁️ UNIFIED: Fetching tracks for date range: \(startDate) to \(endDate) from global collection")
+        
+        // Get actual total count for this user
+        let totalCountQuery = try await db.collection("spotifyListeningHistory")
+            .whereField("userId", isEqualTo: userId)
+            .count
+            .getAggregation(source: .server)
+        let totalCount = Int(totalCountQuery.count)
+        print("📊 DEBUG: User has \(totalCount) TOTAL tracks in unified collection")
+        
+        // Get date range of existing tracks
+        if totalCount > 0 {
+            let oldestTrack = try await db.collection("spotifyListeningHistory")
+                .whereField("userId", isEqualTo: userId)
+                .order(by: "playedAt", descending: false)
+                .limit(to: 1)
+                .getDocuments()
+            
+            let newestTrack = try await db.collection("spotifyListeningHistory")
+                .whereField("userId", isEqualTo: userId)
+                .order(by: "playedAt", descending: true)
+                .limit(to: 1)
+                .getDocuments()
                 
-                // Auto-restore if we haven't done it yet (check for restore marker)
-                let restoreMarkerCheck = try await db.collection("spotifyListeningHistory")
-                    .whereField("userId", isEqualTo: userId)
-                    .whereField("source", isEqualTo: "legacy_restore")
-                    .limit(to: 1)
-                    .getDocuments()
-                
-                if restoreMarkerCheck.documents.isEmpty {
-                    print("🚀 DEBUG: No previous restoration detected - starting automatic restoration...")
-                    Task {
-                        do {
-                            try await self.restoreLegacyTracksToUnifiedCollection(userId: userId)
-                            print("✅ AUTO-RESTORE: Successfully restored legacy tracks")
-                        } catch {
-                            print("❌ AUTO-RESTORE: Failed - \(error)")
-                        }
-                    }
-                } else {
-                    print("✅ DEBUG: Legacy tracks already restored previously")
-                }
-            } else {
-                print("❌ DEBUG: No legacy tracks found to restore")
+            if let oldest = oldestTrack.documents.first?.data()["playedAt"] as? Timestamp,
+               let newest = newestTrack.documents.first?.data()["playedAt"] as? Timestamp {
+                print("📅 DEBUG: Track date range: \(oldest.dateValue()) to \(newest.dateValue())")
             }
         }
         
@@ -393,7 +452,10 @@ class FirestoreService {
                   let trackName = data["trackName"] as? String,
                   let artistName = data["artistName"] as? String,
                   let playedAtTimestamp = data["playedAt"] as? Timestamp else {
-                print("❌ Invalid track data in document \(document.documentID)")
+                // Only log occasional invalid documents to avoid spam
+                if Int.random(in: 1...100) == 1 {
+                    print("❌ Invalid track data found (1 of ~100 shown) - document ID: \(document.documentID)")
+                }
                 return nil
             }
             
@@ -409,6 +471,8 @@ class FirestoreService {
         }
         
         print("☁️ UNIFIED: Retrieved \(tracks.count) tracks for date range from global collection")
+        print("🔍 DEBUG: Requested date range: \(startDate) to \(endDate)")
+        print("🔍 DEBUG: Query returned \(snapshot.documents.count) documents")
         return tracks
     }
     
@@ -856,6 +920,51 @@ struct RunCacheStatus {
         } else {
             return "\(totalCachedRuns) cached \(runText)"
         }
+    }
+}
+
+extension FirestoreService {
+    // MARK: - Album Art Caching
+    
+    func cacheAlbumArt(cacheKey: String, imageData: Data) async throws {
+        let docRef = db.collection("albumArtCache").document(cacheKey)
+        
+        let data: [String: Any] = [
+            "imageData": imageData,
+            "cachedAt": Timestamp(date: Date()),
+            "size": imageData.count
+        ]
+        
+        try await docRef.setData(data)
+        print("🎨 FIREBASE: Cached album art '\(cacheKey)' (\(imageData.count) bytes)")
+    }
+    
+    func getCachedAlbumArt(cacheKey: String) async throws -> Data? {
+        let docRef = db.collection("albumArtCache").document(cacheKey)
+        
+        let document = try await docRef.getDocument()
+        
+        guard document.exists,
+              let data = document.data(),
+              let imageData = data["imageData"] as? Data else {
+            return nil
+        }
+        
+        // Check if cache is not too old (30 days)
+        if let cachedAt = data["cachedAt"] as? Timestamp {
+            let cacheAge = Date().timeIntervalSince(cachedAt.dateValue())
+            let maxAge: TimeInterval = 30 * 24 * 60 * 60 // 30 days
+            
+            if cacheAge > maxAge {
+                // Cache is too old, delete it
+                try await docRef.delete()
+                print("🎨 FIREBASE: Deleted expired cache for '\(cacheKey)'")
+                return nil
+            }
+        }
+        
+        print("🎨 FIREBASE: Retrieved cached album art '\(cacheKey)' (\(imageData.count) bytes)")
+        return imageData
     }
 }
 

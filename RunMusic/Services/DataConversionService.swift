@@ -7,8 +7,18 @@ class DataConversionService {
     
     private init() {}
     
-    func convertStravaActivityToRunActivity(_ stravaActivity: StravaActivity, detailedActivity: StravaDetailedActivity? = nil, streams: [StravaStream]? = nil) async -> RunActivity {
-        print("🏃 DataConversionService: Converting activity '\(stravaActivity.name)' (ID: \(stravaActivity.id))")
+    // Debug logging control - set to true only when debugging
+    private let debugLoggingEnabled = false
+    
+    private func debugLog(_ message: String) {
+        if debugLoggingEnabled {
+            print(message)
+        }
+    }
+    
+    func convertStravaActivityToRunActivity(_ stravaActivity: StravaActivity, detailedActivity: StravaDetailedActivity? = nil, streams: [StravaStream]? = nil, skipHeavyCalculations: Bool = false) async -> RunActivity {
+        let startTime = CFAbsoluteTimeGetCurrent()
+        debugLog("🏃 DataConversionService: Converting activity '\(stravaActivity.name)' (ID: \(stravaActivity.id)) [skipHeavy: \(skipHeavyCalculations)]")
         
         let dateFormatter = ISO8601DateFormatter()
         
@@ -21,36 +31,40 @@ class DataConversionService {
             // For Pacific Time in summer (PDT), utcOffset = -25200 (UTC-7)
             // Since Strava gives us UTC time, we DON'T add the offset - the Date object already represents the correct moment in time
             finalDate = utcDate
-            print("🕐 Timezone analysis:")
-            print("  - Strava UTC time: \(utcDate)")
-            print("  - UTC offset from Strava: \(utcOffset) seconds (\(utcOffset/3600) hours)")
-            
-            // Show what this looks like in different timezones for debugging
-            let utcFormatter = DateFormatter()
-            utcFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-            utcFormatter.timeZone = TimeZone(abbreviation: "UTC")
-            
-            let pacificFormatter = DateFormatter()
-            pacificFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-            pacificFormatter.timeZone = TimeZone(identifier: "America/Los_Angeles")
-            
-            print("  - As UTC: \(utcFormatter.string(from: finalDate))")
-            print("  - As Pacific: \(pacificFormatter.string(from: finalDate)) (this should match your actual run time)")
+            if debugLoggingEnabled {
+                debugLog("🕐 Timezone analysis:")
+                debugLog("  - Strava UTC time: \(utcDate)")
+                debugLog("  - UTC offset from Strava: \(utcOffset) seconds (\(utcOffset/3600) hours)")
+                
+                // Show what this looks like in different timezones for debugging
+                let utcFormatter = DateFormatter()
+                utcFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                utcFormatter.timeZone = TimeZone(abbreviation: "UTC")
+                
+                let pacificFormatter = DateFormatter()
+                pacificFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                pacificFormatter.timeZone = TimeZone(identifier: "America/Los_Angeles")
+                
+                debugLog("  - As UTC: \(utcFormatter.string(from: finalDate))")
+                debugLog("  - As Pacific: \(pacificFormatter.string(from: finalDate)) (this should match your actual run time)")
+            }
             
         } else {
             finalDate = utcDate
-            print("⚠️ No UTC offset available, using UTC time: \(utcDate)")
+            debugLog("⚠️ No UTC offset available, using UTC time: \(utcDate)")
         }
         
         let date = finalDate
         
-        // Log basic activity data
-        print("📍 Activity basic data:")
-        print("  - Name: \(stravaActivity.name)")
-        print("  - Distance: \(stravaActivity.distance)m")
-        print("  - Start lat/lng: \(stravaActivity.startLatlng?.description ?? "nil")")
-        print("  - End lat/lng: \(stravaActivity.endLatlng?.description ?? "nil")")
-        print("  - Map polyline: \(stravaActivity.map?.polyline != nil ? "EXISTS (\(stravaActivity.map!.polyline!.count) chars)" : "nil")")
+        // Log basic activity data (only when debugging)
+        if debugLoggingEnabled {
+            debugLog("📍 Activity basic data:")
+            debugLog("  - Name: \(stravaActivity.name)")
+            debugLog("  - Distance: \(stravaActivity.distance)m")
+            debugLog("  - Start lat/lng: \(stravaActivity.startLatlng?.description ?? "nil")")
+            debugLog("  - End lat/lng: \(stravaActivity.endLatlng?.description ?? "nil")")
+            debugLog("  - Map polyline: \(stravaActivity.map?.polyline != nil ? "EXISTS (\(stravaActivity.map!.polyline!.count) chars)" : "nil")")
+        }
         
         let startLocation = stravaActivity.startLatlng?.count == 2 ? LocationData(
             latitude: stravaActivity.startLatlng![0],
@@ -66,42 +80,46 @@ class DataConversionService {
         
         var routeCoordinates: [LocationData] = []
         
-        print("🗺️ ========== ROUTE DATA PROCESSING ==========")
+        debugLog("🗺️ ========== ROUTE DATA PROCESSING ==========")
         if let streams = streams {
-            print("📈 Processing streams data...")
+            debugLog("📈 Processing streams data...")
             routeCoordinates = extractRouteCoordinatesFromStreams(streams, startDate: date)
-            print("📈 Extracted \(routeCoordinates.count) coordinates from streams")
+            debugLog("📈 Extracted \(routeCoordinates.count) coordinates from streams")
         } else if let detailedPolyline = detailedActivity?.map?.polyline, !detailedPolyline.isEmpty {
-            print("🗺️ Processing detailed activity polyline data (length: \(detailedPolyline.count))...")
+            debugLog("🗺️ Processing detailed activity polyline data (length: \(detailedPolyline.count))...")
             routeCoordinates = decodePolyline(detailedPolyline, startDate: date)
-            print("🗺️ Decoded \(routeCoordinates.count) coordinates from detailed polyline")
+            debugLog("🗺️ Decoded \(routeCoordinates.count) coordinates from detailed polyline")
         } else if let basicPolyline = stravaActivity.map?.polyline, !basicPolyline.isEmpty {
-            print("🗺️ Processing basic activity polyline data (length: \(basicPolyline.count))...")
+            debugLog("🗺️ Processing basic activity polyline data (length: \(basicPolyline.count))...")
             routeCoordinates = decodePolyline(basicPolyline, startDate: date)
-            print("🗺️ Decoded \(routeCoordinates.count) coordinates from basic polyline")
+            debugLog("🗺️ Decoded \(routeCoordinates.count) coordinates from basic polyline")
         } else {
-            print("❌ ========== ROUTE DEBUG - NO DATA ==========")
-            print("❌ No route data available:")
-            print("❌   - Streams: \(streams != nil ? "PROVIDED" : "nil")")
-            print("❌   - Detailed polyline: \(detailedActivity?.map?.polyline?.isEmpty == false ? "EXISTS (\(detailedActivity?.map?.polyline?.count ?? 0) chars)" : "MISSING/EMPTY")")
-            print("❌   - Basic polyline: \(stravaActivity.map?.polyline?.isEmpty == false ? "EXISTS (\(stravaActivity.map?.polyline?.count ?? 0) chars)" : "MISSING/EMPTY")")
-            print("❌ =============================================")
+            if debugLoggingEnabled {
+                debugLog("❌ ========== ROUTE DEBUG - NO DATA ===========")
+                debugLog("❌ No route data available:")
+                debugLog("❌   - Streams: \(streams != nil ? "PROVIDED" : "nil")")
+                debugLog("❌   - Detailed polyline: \(detailedActivity?.map?.polyline?.isEmpty == false ? "EXISTS (\(detailedActivity?.map?.polyline?.count ?? 0) chars)" : "MISSING/EMPTY")")
+                debugLog("❌   - Basic polyline: \(stravaActivity.map?.polyline?.isEmpty == false ? "EXISTS (\(stravaActivity.map?.polyline?.count ?? 0) chars)" : "MISSING/EMPTY")")
+                debugLog("❌ =============================================")
+            }
         }
-        print("🗺️ Final route coordinates count: \(routeCoordinates.count)")
-        print("🗺️ ===============================================")
+        debugLog("🗺️ Final route coordinates count: \(routeCoordinates.count)")
+        debugLog("🗺️ ===============================================")
         
         let averagePace = stravaActivity.distance > 0 ? Double(stravaActivity.movingTime) / (stravaActivity.distance / 1000.0) : 0
         
-        // Log detailed activity data
-        if let detailed = detailedActivity {
-            print("🔍 Detailed activity data:")
-            print("  - Location city: \(detailed.locationCity ?? "nil")")
-            print("  - Location state: \(detailed.locationState ?? "nil")")
-            print("  - Location country: \(detailed.locationCountry ?? "nil")")
-            print("  - Map polyline: \(detailed.map?.polyline != nil ? "EXISTS (\(detailed.map!.polyline!.count) chars)" : "nil")")
-            print("  - Map summary polyline: \(detailed.map?.summaryPolyline != nil ? "EXISTS (\(detailed.map!.summaryPolyline!.count) chars)" : "nil")")
-        } else {
-            print("⚠️ No detailed activity data provided")
+        // Log detailed activity data (only when debugging)
+        if debugLoggingEnabled {
+            if let detailed = detailedActivity {
+                debugLog("🔍 Detailed activity data:")
+                debugLog("  - Location city: \(detailed.locationCity ?? "nil")")
+                debugLog("  - Location state: \(detailed.locationState ?? "nil")")
+                debugLog("  - Location country: \(detailed.locationCountry ?? "nil")")
+                debugLog("  - Map polyline: \(detailed.map?.polyline != nil ? "EXISTS (\(detailed.map!.polyline!.count) chars)" : "nil")")
+                debugLog("  - Map summary polyline: \(detailed.map?.summaryPolyline != nil ? "EXISTS (\(detailed.map!.summaryPolyline!.count) chars)" : "nil")")
+            } else {
+                debugLog("⚠️ No detailed activity data provided")
+            }
         }
         
         // Try to get city from Strava data first, then fall back to coordinate-based lookup
@@ -110,12 +128,12 @@ class DataConversionService {
         
         // If no city from Strava and we have start coordinates, use reverse geocoding
         if city == nil, let startLat = stravaActivity.startLatlng?.first, let startLon = stravaActivity.startLatlng?.last {
-            print("🌍 No city from Strava, attempting reverse geocoding: \(startLat), \(startLon)")
+            debugLog("🌍 No city from Strava, attempting reverse geocoding: \(startLat), \(startLon)")
             city = await reverseGeocodeCoordinates(latitude: startLat, longitude: startLon)
         }
         
         // Perform smart location analysis using the full route
-        print("🗺️ Starting smart location analysis...")
+        debugLog("🗺️ Starting smart location analysis...")
         let locationAnalysis = await LocationAnalysisService.shared.analyzeRunLocation(for: routeCoordinates)
         
         var runActivity = RunActivity(
@@ -136,21 +154,23 @@ class DataConversionService {
             powerSongAveragePace: nil
         )
         
-        print("✅ Created RunActivity with:")
-        print("  - City: \(city ?? "nil")")
-        print("  - Route coordinates: \(routeCoordinates.count)")
-        print("  - Start location: \(startLocation != nil ? "EXISTS" : "nil")")
-        if routeCoordinates.isEmpty {
-            print("❌ No route coordinates! Polyline issues:")
-            print("  - Basic activity polyline: \(stravaActivity.map?.polyline?.isEmpty == false ? "EXISTS" : "MISSING")")
-            print("  - Detailed activity polyline: \(detailedActivity?.map?.polyline?.isEmpty == false ? "EXISTS" : "MISSING")")
-        } else {
-            print("✅ Route coordinates sample: \(routeCoordinates.prefix(3))")
+        if debugLoggingEnabled {
+            debugLog("✅ Created RunActivity with:")
+            debugLog("  - City: \(city ?? "nil")")
+            debugLog("  - Route coordinates: \(routeCoordinates.count)")
+            debugLog("  - Start location: \(startLocation != nil ? "EXISTS" : "nil")")
+            if routeCoordinates.isEmpty {
+                debugLog("❌ No route coordinates! Polyline issues:")
+                debugLog("  - Basic activity polyline: \(stravaActivity.map?.polyline?.isEmpty == false ? "EXISTS" : "MISSING")")
+                debugLog("  - Detailed activity polyline: \(detailedActivity?.map?.polyline?.isEmpty == false ? "EXISTS" : "MISSING")")
+            } else {
+                debugLog("✅ Route coordinates sample: \(routeCoordinates.prefix(3))")
+            }
         }
         
         // Fetch weather data for the run if we have location data
         if let startLocation = startLocation {
-            print("🌤️ Fetching weather data for run at \(date)...")
+            debugLog("🌤️ Fetching weather data for run at \(date)...")
             
             // Visual Crossing supports historical weather data
             // Only use real API data for testing
@@ -159,18 +179,27 @@ class DataConversionService {
                     for: startLocation.coordinate,
                     on: date
                 )
-                print("✅ Visual Crossing weather data fetched: \(runActivity.weatherData!.temperature)°F, \(runActivity.weatherData!.condition.rawValue)")
+                debugLog("✅ Visual Crossing weather data fetched: \(runActivity.weatherData!.temperature)°F, \(runActivity.weatherData!.condition.rawValue)")
             } catch {
-                print("⚠️ Visual Crossing API error: \(error.localizedDescription)")
-                print("⚠️ No weather data will be added for this run (testing real data only)")
-                // Leave runActivity.weatherData as nil to see which runs get real data
+                debugLog("⚠️ Visual Crossing API error: \(error.localizedDescription)")
+                debugLog("🌤️ Falling back to simulated weather data...")
+                // Use simulated weather as fallback to ensure weather always shows
+                runActivity.weatherData = WeatherService.shared.simulateWeatherData(
+                    for: startLocation.coordinate,
+                    on: date
+                )
+                debugLog("✅ Simulated weather data: \(runActivity.weatherData!.temperature)°F, \(runActivity.weatherData!.condition.rawValue)")
             }
             
             // If weather suggests a different color scheme, log it
             if let suggestedColor = runActivity.weatherBasedRouteColor {
-                print("🎨 Weather suggests route color: \(suggestedColor.name)")
+                debugLog("🎨 Weather suggests route color: \(suggestedColor.name)")
             }
         }
+        
+        let endTime = CFAbsoluteTimeGetCurrent()
+        let processingTime = endTime - startTime
+        debugLog("🏃 ⏱️ PERFORMANCE: Converted '\(stravaActivity.name)' in \(String(format: "%.2f", processingTime))s")
         
         return runActivity
     }
@@ -179,22 +208,37 @@ class DataConversionService {
     
     /// Analyzes run data using coordinates to find the song during which the runner had their fastest average pace
     func calculatePowerSong(for runActivity: inout RunActivity, from streams: [StravaStream]) {
-        guard let spotifyTracks = runActivity.spotifyTracks, !spotifyTracks.isEmpty else {
-            print("🎵 No Spotify tracks available for power song analysis")
+        // PERFORMANCE OPTIMIZATION: Skip if power song already exists (from cache)
+        if runActivity.powerSong != nil {
+            debugLog("🎵 ⚡ SKIPPING: Power song already calculated for '\(runActivity.name)'")
             return
         }
         
-        print("🎵 Starting coordinate-based power song analysis with \(spotifyTracks.count) tracks...")
+        print("🔥 POWER SONG CALCULATION START for run: \(runActivity.name)")
+        print("🔥 STREAMS: Received \(streams.count) stream types")
+        for stream in streams {
+            print("🔥 STREAM TYPE: \(stream.type) with \(stream.data.count) data points")
+        }
+        
+        guard let spotifyTracks = runActivity.spotifyTracks, !spotifyTracks.isEmpty else {
+            print("🔥 POWER SONG FAIL: No Spotify tracks available for power song analysis")
+            debugLog("🎵 No Spotify tracks available for power song analysis")
+            return
+        }
+        
+        print("🔥 POWER SONG: Found \(spotifyTracks.count) Spotify tracks")
+        
+        debugLog("🎵 Starting coordinate-based power song analysis with \(spotifyTracks.count) tracks...")
         
         // Reuse existing coordinate extraction logic that works for route display
         let locationData = extractRouteCoordinatesFromStreams(streams, startDate: runActivity.date)
         
         guard !locationData.isEmpty else {
-            print("🎵 No coordinate data found for power song analysis")
+            debugLog("🎵 No coordinate data found for power song analysis")
             return
         }
         
-        print("🎵 Successfully extracted \(locationData.count) coordinate points")
+        debugLog("🎵 Successfully extracted \(locationData.count) coordinate points")
         
         // Convert LocationData to time-indexed coordinates for efficient lookup
         var timeCoordinates: [(time: TimeInterval, coordinate: CLLocationCoordinate2D)] = []
@@ -204,23 +248,23 @@ class DataConversionService {
                 timeCoordinates.append((time: timeOffset, coordinate: location.coordinate))
                 
                 // Debug first few coordinates
-                if index < 3 {
-                    print("🎵 COORDINATE DEBUG \(index): time offset = \(timeOffset)s")
+                if debugLoggingEnabled && index < 3 {
+                    debugLog("🎵 COORDINATE DEBUG \(index): time offset = \(timeOffset)s")
                 }
             } else {
-                if index < 3 {
-                    print("🎵 COORDINATE DEBUG \(index): ❌ No timestamp!")
+                if debugLoggingEnabled && index < 3 {
+                    debugLog("🎵 COORDINATE DEBUG \(index): ❌ No timestamp!")
                 }
             }
         }
         
         guard !timeCoordinates.isEmpty else {
-            print("🎵 No valid time-indexed coordinates found")
+            debugLog("🎵 No valid time-indexed coordinates found")
             return
         }
         
         let runDuration = timeCoordinates.map { $0.time }.max() ?? 0
-        print("🎵 Run duration calculated from coordinates: \(runDuration)s (\(runDuration/60) minutes)")
+        debugLog("🎵 Run duration calculated from coordinates: \(runDuration)s (\(runDuration/60) minutes)")
         
         var bestTrack: SpotifyTrack?
         var fastestPace: Double = Double.infinity // Lower is better (minutes per mile)
@@ -236,22 +280,22 @@ class DataConversionService {
             let runDuration = timeCoordinates.last?.time ?? 0
             
             // Debug timing information for first few tracks
-            if let trackIndex = spotifyTracks.firstIndex(where: { $0.id == track.id }), trackIndex < 3 {
-                print("🎵 TIMING DEBUG for \"\(track.name)\":")
-                print("   - Run start: \(runActivity.date)")
-                print("   - Song played at: \(songStartTime)")
-                print("   - Start offset: \(startOffset)s")
-                print("   - End offset: \(endOffset)s") 
-                print("   - Run duration: \(runDuration)s")
+            if debugLoggingEnabled, let trackIndex = spotifyTracks.firstIndex(where: { $0.id == track.id }), trackIndex < 3 {
+                debugLog("🎵 TIMING DEBUG for \"\(track.name)\":")
+                debugLog("   - Run start: \(runActivity.date)")
+                debugLog("   - Song played at: \(songStartTime)")
+                debugLog("   - Start offset: \(startOffset)s")
+                debugLog("   - End offset: \(endOffset)s") 
+                debugLog("   - Run duration: \(runDuration)s")
             }
             
             // Skip if song is entirely outside run time bounds
             if startOffset < 0 && endOffset < 0 {
-                print("🎵 \"\(track.name)\" by \(track.artist): played before run started")
+                debugLog("🎵 \"\(track.name)\" by \(track.artist): played before run started")
                 continue
             }
             if startOffset > runDuration {
-                print("🎵 \"\(track.name)\" by \(track.artist): played after run ended")
+                debugLog("🎵 \"\(track.name)\" by \(track.artist): played after run ended")
                 continue
             }
             
@@ -260,7 +304,7 @@ class DataConversionService {
             let endCoord = findClosestCoordinate(at: min(endOffset, timeCoordinates.last!.time), in: timeCoordinates)
             
             guard let startPoint = startCoord, let endPoint = endCoord else {
-                print("🎵 \"\(track.name)\" by \(track.artist): could not find coordinates for song timeframe")
+                debugLog("🎵 \"\(track.name)\" by \(track.artist): could not find coordinates for song timeframe")
                 continue
             }
             
@@ -279,7 +323,7 @@ class DataConversionService {
                 
                 let paceMinutes = Int(minutesPerMile)
                 let paceSeconds = Int((minutesPerMile - Double(paceMinutes)) * 60)
-                print("🎵 \"\(track.name)\" by \(track.artist): \(paceMinutes):\(String(format: "%02d", paceSeconds)) per mile pace")
+                debugLog("🎵 \"\(track.name)\" by \(track.artist): \(paceMinutes):\(String(format: "%02d", paceSeconds)) per mile pace")
                 
                 // Check if this is the fastest pace so far
                 if minutesPerMile < fastestPace && minutesPerMile > 0 {
@@ -287,7 +331,7 @@ class DataConversionService {
                     bestTrack = track
                 }
             } else {
-                print("🎵 \"\(track.name)\" by \(track.artist): insufficient data for pace calculation")
+                debugLog("🎵 \"\(track.name)\" by \(track.artist): insufficient data for pace calculation")
             }
         }
         
@@ -301,9 +345,9 @@ class DataConversionService {
             
             let paceMinutes = Int(fastestPace)
             let paceSeconds = Int((fastestPace - Double(paceMinutes)) * 60)
-            print("🎵 ⚡ POWER SONG: \"\(powerTrack.name)\" by \(powerTrack.artist) at \(paceMinutes):\(String(format: "%02d", paceSeconds)) per mile pace")
+            debugLog("🎵 ⚡ POWER SONG: \"\(powerTrack.name)\" by \(powerTrack.artist) at \(paceMinutes):\(String(format: "%02d", paceSeconds)) per mile pace")
         } else {
-            print("🎵 No power song could be determined from available data")
+            debugLog("🎵 No power song could be determined from available data")
         }
     }
     
@@ -413,16 +457,18 @@ class DataConversionService {
         
         var coordinates: [LocationData] = []
         
-        // Debug time stream format
-        print("🕐 TIME STREAM DEBUG: Found time stream with \(timeStream.data.count) data points")
-        for (debugIndex, timeData) in timeStream.data.prefix(5).enumerated() {
-            switch timeData {
-            case .int(let seconds):
-                print("🕐 Time[\(debugIndex)]: .int(\(seconds))")
-            case .double(let seconds):
-                print("🕐 Time[\(debugIndex)]: .double(\(seconds))")
-            case .coordinate(let coords):
-                print("🕐 Time[\(debugIndex)]: .coordinate(\(coords)) - UNEXPECTED!")
+        // Debug time stream format (only when debugging)
+        if debugLoggingEnabled {
+            debugLog("🕐 TIME STREAM DEBUG: Found time stream with \(timeStream.data.count) data points")
+            for (debugIndex, timeData) in timeStream.data.prefix(5).enumerated() {
+                switch timeData {
+                case .int(let seconds):
+                    debugLog("🕐 Time[\(debugIndex)]: .int(\(seconds))")
+                case .double(let seconds):
+                    debugLog("🕐 Time[\(debugIndex)]: .double(\(seconds))")
+                case .coordinate(let coords):
+                    debugLog("🕐 Time[\(debugIndex)]: .coordinate(\(coords)) - UNEXPECTED!")
+                }
             }
         }
         
@@ -642,8 +688,8 @@ class DataConversionService {
     }
     
     func convertSpotifyTrackToSpotifyTrack(_ spotifyTrack: SpotifyPlayHistoryItem) -> SpotifyTrack {
-        print("🕐 ========== TIMESTAMP PARSING DEBUG ==========")
-        print("🕐 Raw playedAt string: '\(spotifyTrack.playedAt)'")
+        debugLog("🕐 ========== TIMESTAMP PARSING DEBUG ===========")
+        debugLog("🕐 Raw playedAt string: '\(spotifyTrack.playedAt)'")
         
         // Try multiple date formatters for different possible formats
         let iso8601Formatter = ISO8601DateFormatter()
@@ -663,43 +709,46 @@ class DataConversionService {
         let playedAt: Date
         if let date = iso8601Formatter.date(from: spotifyTrack.playedAt) {
             playedAt = date
-            print("✅ Parsed with ISO8601 (with fractional seconds): \(playedAt)")
+            debugLog("✅ Parsed with ISO8601 (with fractional seconds): \(playedAt)")
         } else if let date = iso8601FormatterNoFraction.date(from: spotifyTrack.playedAt) {
             playedAt = date
-            print("✅ Parsed with ISO8601 (no fractional seconds): \(playedAt)")
+            debugLog("✅ Parsed with ISO8601 (no fractional seconds): \(playedAt)")
         } else if let date = customFormatter.date(from: spotifyTrack.playedAt) {
             playedAt = date
-            print("✅ Parsed with custom formatter (with fractional): \(playedAt)")
+            debugLog("✅ Parsed with custom formatter (with fractional): \(playedAt)")
         } else if let date = customFormatterNoFraction.date(from: spotifyTrack.playedAt) {
             playedAt = date
-            print("✅ Parsed with custom formatter (no fractional): \(playedAt)")
+            debugLog("✅ Parsed with custom formatter (no fractional): \(playedAt)")
         } else {
             playedAt = Date()
-            print("❌ FAILED TO PARSE - falling back to current time: \(playedAt)")
+            // Keep error logging for timestamp failures as they are critical
+            print("❌ FAILED TO PARSE TIMESTAMP - falling back to current time: \(playedAt)")
             print("❌ This is the root cause of the timestamp issue!")
         }
         
-        // Show timezone information for debugging
-        let utcFormatter = DateFormatter()
-        utcFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        utcFormatter.timeZone = TimeZone(abbreviation: "UTC")
-        
-        let pacificFormatter = DateFormatter()
-        pacificFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        pacificFormatter.timeZone = TimeZone(identifier: "America/Los_Angeles")
-        
-        print("🌍 Timezone comparison:")
-        print("  - UTC: \(utcFormatter.string(from: playedAt))")
-        print("  - Pacific: \(pacificFormatter.string(from: playedAt))")
-        print("  - System timezone: \(TimeZone.current.identifier)")
-        print("🕐 ===============================================")
+        // Show timezone information for debugging (only when debugging enabled)
+        if debugLoggingEnabled {
+            let utcFormatter = DateFormatter()
+            utcFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            utcFormatter.timeZone = TimeZone(abbreviation: "UTC")
+            
+            let pacificFormatter = DateFormatter()
+            pacificFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            pacificFormatter.timeZone = TimeZone(identifier: "America/Los_Angeles")
+            
+            debugLog("🌍 Timezone comparison:")
+            debugLog("  - UTC: \(utcFormatter.string(from: playedAt))")
+            debugLog("  - Pacific: \(pacificFormatter.string(from: playedAt))")
+            debugLog("  - System timezone: \(TimeZone.current.identifier)")
+        }
+        debugLog("🕐 ===============================================")
         
         let artistName = spotifyTrack.track.artists.first?.name ?? "Unknown Artist"
         let albumImageURL = spotifyTrack.track.album.images.first?.url
         
         // Debug album art extraction (simplified)
-        if albumImageURL == nil {
-            print("⚠️ No album art for '\(spotifyTrack.track.name)' by \(artistName) (album: '\(spotifyTrack.track.album.name)')")
+        if debugLoggingEnabled && albumImageURL == nil {
+            debugLog("⚠️ No album art for '\(spotifyTrack.track.name)' by \(artistName) (album: '\(spotifyTrack.track.album.name)')")
         }
         
         return SpotifyTrack(

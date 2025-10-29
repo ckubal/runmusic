@@ -9,6 +9,15 @@ class SpotifyService: ObservableObject {
     private let clientSecret = "2e15a2c6cff24158baf48a68ba769fa4"
     private let redirectURI = "runthetunes://spotify-auth"
     
+    // Debug logging control - disabled for performance
+    private let debugLoggingEnabled = false
+    
+    private func debugLog(_ message: String) {
+        if debugLoggingEnabled {
+            print(message)
+        }
+    }
+    
     @Published var isAuthenticated = false {
         didSet {
             print("🔐 SPOTIFY AUTH STATE CHANGE: \(oldValue) → \(isAuthenticated)")
@@ -165,30 +174,30 @@ class SpotifyService: ObservableObject {
     }
     
     func fetchRecentlyPlayed(startTime: Date, endTime: Date) async throws -> [SpotifyTrack] {
-        print("🎵 SpotifyService: Fetching recently played tracks")
-        print("🎵 Time range: \(startTime) to \(endTime)")
+        debugLog("🎵 SpotifyService: Fetching recently played tracks")
+        debugLog("🎵 Time range: \(startTime) to \(endTime)")
         
         // Try to refresh token if needed
         guard await refreshTokenIfNeeded() else {
-            print("❌ SpotifyService: No access token available after refresh attempt")
+            debugLog("❌ SpotifyService: No access token available after refresh attempt")
             throw SpotifyError.notAuthenticated
         }
         
         guard let accessToken = accessToken else {
-            print("❌ SpotifyService: No access token available")
+            debugLog("❌ SpotifyService: No access token available")
             throw SpotifyError.notAuthenticated
         }
         
         let startTimestamp = Int(startTime.timeIntervalSince1970 * 1000)
         let endTimestamp = Int(endTime.timeIntervalSince1970 * 1000)
         
-        print("🎵 Timestamp range: \(startTimestamp) to \(endTimestamp)")
-        print("🎵 Time range: \(startTime) to \(endTime)")
+        debugLog("🎵 Timestamp range: \(startTimestamp) to \(endTimestamp)")
+        debugLog("🎵 Time range: \(startTime) to \(endTime)")
         
         // Check if the time range is recent enough - Spotify only keeps ~50 recent tracks
         let now = Date()
         let daysSinceRun = now.timeIntervalSince(endTime) / (24 * 60 * 60)
-        print("🎵 Days since run ended: \(daysSinceRun)")
+        debugLog("🎵 Days since run ended: \(daysSinceRun)")
         
         var components = URLComponents(string: "https://api.spotify.com/v1/me/player/recently-played")
         
@@ -200,14 +209,14 @@ class SpotifyService: ObservableObject {
         ]
         
         guard let url = components?.url else {
-            print("❌ SpotifyService: Invalid URL for recently played")
+            debugLog("❌ SpotifyService: Invalid URL for recently played")
             throw SpotifyError.invalidURL
         }
         
         var request = URLRequest(url: url)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         
-        print("🌐 SpotifyService: Making request to: \(url)")
+        debugLog("🌐 SpotifyService: Making request to: \(url)")
         let (data, response) = try await URLSession.shared.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -1094,7 +1103,7 @@ class SpotifyService: ObservableObject {
         return nil
     }
     
-    private func storeImportedTracks(_ newTracks: [SpotifyTrack]) async -> [SpotifyTrack] {
+    func storeImportedTracks(_ newTracks: [SpotifyTrack]) async -> [SpotifyTrack] {
         print("💾 Storing \(newTracks.count) imported tracks...")
         
         do {
@@ -1487,6 +1496,7 @@ class SpotifyService: ObservableObject {
             print("🔐   refreshToken prefix: \(String(refreshToken.prefix(10)))...")
         } else {
             print("🚨   WARNING: No refresh token in auth response!")
+            print("🔐   Preserving existing refresh token if available")
         }
         
         UserDefaults.standard.set(authResponse.accessToken, forKey: "spotify_access_token")
@@ -1494,7 +1504,8 @@ class SpotifyService: ObservableObject {
             UserDefaults.standard.set(refreshToken, forKey: "spotify_refresh_token")
             print("✅   Stored refresh token to UserDefaults")
         } else {
-            print("⚠️   No refresh token to store - this might cause future authentication issues")
+            // CRITICAL: Don't overwrite existing refresh token if not provided
+            print("⚠️   No refresh token in response - preserving existing refresh token")
         }
         
         let expirationDate = Date().addingTimeInterval(TimeInterval(authResponse.expiresIn))
@@ -1507,9 +1518,12 @@ class SpotifyService: ObservableObject {
     
     private func storeCredentialsToFirebase(_ authResponse: SpotifyAuthResponse) {
         Task {
+            // CRITICAL: Preserve existing refresh token if not provided in response
+            let tokenToStore = authResponse.refreshToken ?? self.refreshToken
+            
             await storeTokensToFirebase(
                 accessToken: authResponse.accessToken,
-                refreshToken: authResponse.refreshToken,
+                refreshToken: tokenToStore,
                 expiresAt: Date().addingTimeInterval(TimeInterval(authResponse.expiresIn))
             )
         }
@@ -1655,12 +1669,46 @@ class SpotifyService: ObservableObject {
                     print("❌ SpotifyService: Token refresh failed with status: \(httpResponse.statusCode)")
                     if let errorData = String(data: data, encoding: .utf8) {
                         print("❌ Error response: \(errorData)")
-                    }
-                    DispatchQueue.main.async {
-                        self.clearStoredCredentials()
-                        self.isAuthenticated = false
-                        self.accessToken = nil
-                        self.refreshToken = nil
+                        
+                        // CRITICAL FIX: Only clear refresh token on definitive auth errors
+                        // Common errors that should NOT clear refresh token:
+                        // - 429 Rate Limited
+                        // - 503 Service Unavailable  
+                        // - Network timeouts
+                        // - Temporary server errors
+                        
+                        let shouldClearRefreshToken = httpResponse.statusCode == 400 && 
+                                                    (errorData.contains("invalid_grant") || 
+                                                     errorData.contains("refresh_token") ||
+                                                     errorData.contains("invalid_client"))
+                        
+                        if shouldClearRefreshToken {
+                            print("🚨 DEFINITIVE AUTH ERROR: Clearing refresh token due to invalid_grant")
+                            DispatchQueue.main.async {
+                                self.clearStoredCredentials()
+                                self.isAuthenticated = false
+                                self.accessToken = nil
+                                self.refreshToken = nil
+                            }
+                        } else {
+                            print("⚠️ TEMPORARY ERROR: Keeping refresh token and auth status, only clearing access token")
+                            DispatchQueue.main.async {
+                                // Only clear access token, keep refresh token for retry
+                                self.accessToken = nil
+                                // CRITICAL: Do NOT set isAuthenticated = false for temporary server errors
+                                // The user still has valid credentials (refresh token), just the server is down
+                                // Do NOT clear refresh token on temporary errors
+                            }
+                        }
+                    } else {
+                        // No error data, treat as temporary error
+                        print("⚠️ NO ERROR DATA: Keeping refresh token and auth status, only clearing access token")
+                        DispatchQueue.main.async {
+                            self.accessToken = nil
+                            // CRITICAL: Do NOT set isAuthenticated = false for cases with no error data
+                            // These are likely temporary network issues, not authentication failures
+                            // Do NOT clear refresh token
+                        }
                     }
                     return false
                 }
@@ -1685,6 +1733,21 @@ class SpotifyService: ObservableObject {
         Task {
             await clearTokensFromFirebase()
         }
+        
+        print("🔐 SpotifyService: Stored credentials cleared")
+    }
+    
+    // CRITICAL: Conservative credential clearing that preserves refresh token unless definitely invalid
+    private func clearAccessTokenOnly() {
+        UserDefaults.standard.removeObject(forKey: "spotify_access_token")
+        UserDefaults.standard.removeObject(forKey: "spotify_expires_at")
+        
+        // Clear in-memory access token but PRESERVE refresh token
+        accessToken = nil
+        tokenExpiresAt = nil
+        isAuthenticated = false
+        
+        print("🔐 SpotifyService: Cleared access token but preserved refresh token for retry")
     }
     
     // MARK: - Firebase Token Sync
@@ -1788,16 +1851,16 @@ class SpotifyService: ObservableObject {
                     } else {
                         print("❌ SpotifyService: Failed to refresh tokens")
                         await MainActor.run {
-                            self.clearStoredCredentials()
-                            self.isAuthenticated = false
+                            // CONSERVATIVE: Only clear access token, preserve refresh token for retry
+                            self.clearAccessTokenOnly()
                         }
                         return false
                     }
                 } catch {
                     print("❌ SpotifyService: Failed to refresh tokens: \(error)")
                     await MainActor.run {
-                        self.clearStoredCredentials()
-                        self.isAuthenticated = false
+                        // CONSERVATIVE: Network/parsing errors shouldn't destroy refresh token
+                        self.clearAccessTokenOnly()
                     }
                     return false
                 }
@@ -1822,16 +1885,16 @@ class SpotifyService: ObservableObject {
                         } else {
                             print("❌ SpotifyService: Failed to refresh tokens")
                             await MainActor.run {
-                                self.clearStoredCredentials()
-                                self.isAuthenticated = false
+                                // CONSERVATIVE: Only clear access token, preserve refresh token for retry
+                                self.clearAccessTokenOnly()
                             }
                             return false
                         }
                     } catch {
                         print("❌ SpotifyService: Failed to refresh tokens: \(error)")
                         await MainActor.run {
-                            self.clearStoredCredentials()
-                            self.isAuthenticated = false
+                            // CONSERVATIVE: Network/parsing errors shouldn't destroy refresh token
+                            self.clearAccessTokenOnly()
                         }
                         return false
                     }
@@ -1927,10 +1990,33 @@ class SpotifyService: ObservableObject {
     public func syncWithFirebase() async {
         print("🔄 SpotifyService: Syncing with Firebase...")
         
+        // CRITICAL: Store local refresh token before Firebase sync
+        let localRefreshToken = UserDefaults.standard.string(forKey: "spotify_refresh_token")
+        
         // Try to load tokens from Firebase first
         if await loadTokensFromFirebase() {
             // Successfully loaded from Firebase
             print("✅ Loaded Spotify tokens from Firebase")
+            
+            // CRITICAL FIX: If Firebase tokens missing refresh token but we have local one, preserve it
+            if self.refreshToken == nil && localRefreshToken != nil {
+                print("🔧 CRITICAL FIX: Firebase missing refresh token, restoring from local storage")
+                await MainActor.run {
+                    self.refreshToken = localRefreshToken
+                }
+                // Store back to UserDefaults and re-sync to Firebase
+                UserDefaults.standard.set(localRefreshToken, forKey: "spotify_refresh_token")
+                
+                // Re-upload to Firebase with the preserved refresh token
+                if let accessToken = self.accessToken,
+                   let expiresAt = self.tokenExpiresAt {
+                    await storeTokensToFirebase(
+                        accessToken: accessToken,
+                        refreshToken: localRefreshToken,
+                        expiresAt: expiresAt
+                    )
+                }
+            }
         } else {
             // If no Firebase tokens but we have local tokens, upload to Firebase
             if let localAccessToken = UserDefaults.standard.string(forKey: "spotify_access_token"),

@@ -162,6 +162,104 @@ class RunCacheService {
         perPage: Int
     ) async throws -> [RunActivity] {
         
+        guard let userId = Auth.auth().currentUser?.uid else {
+            // Fallback to original behavior for unauthenticated users
+            return try await fetchFromStravaOriginal(stravaService: stravaService, page: page, perPage: perPage)
+        }
+        
+        print("🔄 RunCacheService: Starting smart incremental sync")
+        
+        var allNewRunActivities: [RunActivity] = []
+        var currentPage = page
+        let batchSize = 10 // Smaller batches for efficiency
+        let maxPages = 3 // Maximum 30 activities to check
+        var foundCachedRun = false
+        
+        while !foundCachedRun && currentPage <= (page + maxPages - 1) {
+            print("🔄 RunCacheService: Fetching batch \(currentPage) (\(batchSize) activities)")
+            
+            do {
+                // Fetch small batch from Strava
+                let stravaActivities = try await stravaService.fetchActivities(page: currentPage, perPage: batchSize)
+                
+                if stravaActivities.isEmpty {
+                    print("🔄 RunCacheService: No more activities available, stopping")
+                    break
+                }
+                
+                let runOnlyActivities = stravaActivities.filter { $0.type == "Run" }
+                print("🔄 RunCacheService: Found \(runOnlyActivities.count) runs in batch \(currentPage)")
+                
+                // Check each run against cache
+                for activity in runOnlyActivities {
+                    // Check if this run is already cached
+                    if let existingRun = try? await firestoreService.getCachedRun(userId: userId, runId: String(activity.id)) {
+                        print("🔄 RunCacheService: ✅ Found cached run \(activity.id), stopping incremental sync")
+                        print("🔄 RunCacheService: Smart sync complete - found \(allNewRunActivities.count) new runs")
+                        foundCachedRun = true
+                        break
+                    }
+                    
+                    // Process new run
+                    do {
+                        print("🔄 RunCacheService: Processing new run \(activity.id)")
+                        let detailedActivity = try await stravaService.fetchDetailedActivity(id: activity.id)
+                        let streams = try? await stravaService.fetchActivityStreams(id: activity.id, types: ["latlng", "time", "velocity_smooth"])
+                        let runActivity = await DataConversionService.shared.convertStravaActivityToRunActivity(
+                            activity,
+                            detailedActivity: detailedActivity,
+                            streams: streams
+                        )
+                        allNewRunActivities.append(runActivity)
+                        print("🔄 RunCacheService: ✅ Processed new activity \(activity.id) with route: \(!runActivity.routeCoordinates.isEmpty)")
+                    } catch {
+                        print("🔄 RunCacheService: Failed to process activity \(activity.id): \(error)")
+                        // Continue with other activities
+                    }
+                }
+                
+                currentPage += 1
+                
+            } catch {
+                print("🔄 RunCacheService: Error fetching batch \(currentPage): \(error)")
+                break
+            }
+        }
+        
+        if !foundCachedRun && currentPage > (page + maxPages - 1) {
+            print("🔄 RunCacheService: Reached maximum pages (\(maxPages)), stopping sync")
+        }
+        
+        print("🔄 RunCacheService: Smart sync summary - \(allNewRunActivities.count) new runs found")
+        
+        // Cache the new runs in the background
+        if !allNewRunActivities.isEmpty {
+            Task {
+                await cacheRuns(allNewRunActivities)
+            }
+        }
+        
+        // CRITICAL FIX: Always return cached runs + any new runs  
+        do {
+            let cachedRuns = try await firestoreService.getAllCachedRuns(userId: userId, limit: perPage)
+            let allRunActivities = cachedRuns.map { $0.toRunActivity() }
+            print("🔄 RunCacheService: Returning \(allRunActivities.count) cached runs + \(allNewRunActivities.count) new runs")
+            return allRunActivities
+        } catch {
+            print("🔄 RunCacheService: Failed to load cached runs, returning only new runs: \(error)")
+            return allNewRunActivities
+        }
+    }
+    
+    /// Fallback method for original behavior (unauthenticated users or edge cases)
+    private func fetchFromStravaOriginal(
+        stravaService: StravaService,
+        page: Int,
+        perPage: Int
+    ) async throws -> [RunActivity] {
+        
+        print("🔄 RunCacheService: Using original fetch method")
+        
         // Fetch from Strava API
         let stravaActivities = try await stravaService.fetchActivities(page: page, perPage: perPage)
         let runOnlyActivities = stravaActivities.filter { $0.type == "Run" }
